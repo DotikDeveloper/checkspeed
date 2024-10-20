@@ -1,36 +1,55 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# CheckSpeed Application
 
-## Getting Started
+Это простое современное веб-приложение, разработанное с использованием Next.js и оптимизированное для развертывания с помощью Docker.
 
-First, run the development server:
+## Описание
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+Это приложение предоставляет возможность измерения скорости получения и передачи данных в сети. Оно разработано с учетом производительности, масштабируемости и удобства использования.
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Технологии
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- Next.js
+- React
+- TypeScript
+- Docker
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Запуск с использованием Docker
 
-## Learn More
+Для запуска приложения с помощью Docker выполните следующие команды:
 
-To learn more about Next.js, take a look at the following resources:
+### Собрать образ
+docker build -t my-nextjs-app .
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### Запустить контейнер
+docker run -p 3000:3000 my-nextjs-app
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+После выполнения этих команд приложение будет доступно по адресу `http://localhost:3000`.
 
-## Deploy on Vercel
+## Разработка
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Для локальной разработки выполните следующие шаги:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+1. Клонируйте репозиторий
+2. Установите зависимости: `npm install`
+3. Запустите сервер разработки: `npm run dev`
+
+## Вклад в проект
+
+Мы приветствуем вклад в развитие нашего проекта. Пожалуйста, ознакомьтесь с нашим [руководством по внесению изменений](CONTRIBUTING.md) перед отправкой pull request.
+
+## Лицензия
+
+Этот проект лицензирован под MIT License - см. файл [LICENSE](LICENSE) для подробностей.
+
+MIT License - это permissive лицензия, которая позволяет пользователям свободно использовать, изменять, распространять и продавать программное обеспечение при условии сохранения уведомления об авторских правах и отказа от ответственности. Эта лицензия широко используется в открытом ПО благодаря своей простоте и гибкости.
+
+Основные положения MIT License:
+
+1. Разрешено использование в коммерческих целях
+2. Разрешено распространение
+3. Разрешено модификация
+4. Разрешено частное использование
+5. Ограничение ответственности
+6. Отказ от гарантий
+
+Для полного текста лицензии, пожалуйста, обратитесь к файлу LICENSE в корневой директории проекта.

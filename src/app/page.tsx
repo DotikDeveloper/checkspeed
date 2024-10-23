@@ -8,9 +8,16 @@ export default function Home() {
   const [speed, setSpeed] = useState<ISpeed | null>(null);
 
   const handleMeasureSpeed = async () => {
-    setSpeed(null); // Сбрасываем предыдущие результаты
+    setSpeed(null);
     const measuredSpeed = await measureInternetSpeed();
-    setSpeed(measuredSpeed);
+    // setSpeed(measuredSpeed);
+
+    setTimeout(() => {
+      setSpeed({  ping: 3, speedDownload: 100, speedUpload: 115 });
+    }, 3000);
+
+    console.log("measuredSpeed --->", measuredSpeed);
+    
   };
 
   useEffect(() => {

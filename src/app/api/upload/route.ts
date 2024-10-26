@@ -1,6 +1,7 @@
-import { NextResponse } from 'next/server'; // Импортируем NextResponse
+import { NextResponse } from "next/server"; // Импортируем NextResponse
 
-export async function POST(req: Request) { // Обрабатываем POST-запрос
+export async function POST(req: Request) {
+  // Обрабатываем POST-запрос
   try {
     const body = await req.text(); // Получаем тело запроса как текст
 
@@ -10,6 +11,9 @@ export async function POST(req: Request) { // Обрабатываем POST-за
     return NextResponse.json({ uploadedBytes }); // Возвращаем JSON-ответ
   } catch (error) {
     console.error(error); // Логируем ошибку для отладки
-    return NextResponse.json({ error: 'Ошибка при обработке запроса' }, { status: 500 }); // Обработка ошибок
+    return NextResponse.json(
+      { error: "Ошибка при обработке запроса" },
+      { status: 500 }
+    ); // Обработка ошибок
   }
 }

@@ -12,8 +12,7 @@ export default function Home() {
 
   const handleMeasureSpeed = (): void => {
     console.log("click btn");
-    // перезагрузить страницу
-      window.location.reload();
+    window.location.reload();
   }
 
   return (
@@ -23,7 +22,7 @@ export default function Home() {
           {!speed ? (
             <div className="bg-gray-800 rounded-lg p-6 text-center">
               <h2 className="text-2xl font-semibold text-gray-400 mb-2">Отправка</h2>
-              <div className="h-10 w-32 text-4xl font-bold text-white bg-gray-600 rounded mx-auto animate-pulse">000</div>
+              <div className="h-10 w-32 text-4xl font-bold text-white mx-auto animate-pulse">000</div>
               <span className="text-2xl font-bold text-white">Мбит/с</span>
             </div>
           ) : (
@@ -38,7 +37,7 @@ export default function Home() {
           {!speed ? (
             <div className="bg-gray-800 rounded-lg p-6 text-center">
               <h2 className="text-2xl font-semibold text-gray-400 mb-2">Получение</h2>
-              <div className="h-10 w-32 text-4xl font-bold text-white bg-gray-600 rounded mx-auto animate-pulse">000</div>
+              <div className="h-10 w-32 text-4xl font-bold text-white mx-auto animate-pulse">000</div>
               <span className="text-2xl font-bold text-white">Мбит/с</span>
             </div>
           ) : (
@@ -53,7 +52,7 @@ export default function Home() {
           {!speed ? (
             <div className="bg-gray-800 rounded-lg p-6 text-center">
               <h2 className="text-2xl font-semibold text-gray-400 mb-2">Пинг</h2>
-              <div className="h-10 w-32 text-4xl font-bold text-white bg-gray-600 rounded mx-auto animate-pulse">000</div>
+              <div className="h-10 w-32 text-4xl font-bold text-white mx-auto animate-pulse">000</div>
               <span className="text-2xl font-bold text-white">мс</span>
             </div>
           ) : (

@@ -25,6 +25,9 @@ export default function Home() {
   }, []);
 
   const handleMeasureSpeed = (): void => {
+    setDownloadSpeed(null);
+    setUploadSpeed(null);
+    setPing(null);
     fetchSpeed();
   };
 
@@ -101,7 +104,7 @@ export default function Home() {
       <footer className="flex mt-auto gap-6 flex-wrap items-center justify-center">
         <a
           href="https://dotdev.site"
-          className="text-sm text-blue-500 hover:text-blue-600 transition duration-200"
+          className="text-sm text-gray-500 hover:text-gray-300 transition duration-200"
           target="_blank"
           rel="noopener noreferrer"
         >

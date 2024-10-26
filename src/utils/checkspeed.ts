@@ -53,7 +53,7 @@ export async function testUploadSpeed() {
 }
 
 export async function testPing() {
-  const sizes = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]; // Размеры файлов в МБ
+  const sizes = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]; // Размеры файлов в МБ
   const latencies = [];
 
   for (const size of sizes) {
@@ -67,7 +67,7 @@ export async function testPing() {
 
   // Рассчитываем среднюю задержку
   const averageLatency =
-    latencies.reduce((acc, latency) => acc + latency, 0) / latencies.length;
+    latencies.reduce((acc, latency) => acc + latency, 0) / latencies.length + 1;
 
   return parseFloat(averageLatency.toFixed(1)); // Возвращаем среднюю задержку с округлением
 }

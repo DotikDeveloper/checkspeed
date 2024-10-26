@@ -1,6 +1,5 @@
-
-export interface ISpeed{
-    ping: number,
-    speedDownload: number,
-    speedUpload: number,
-  }
+export interface ISpeed {
+  ping: number;
+  speedDownload: number;
+  speedUpload: number;
+}

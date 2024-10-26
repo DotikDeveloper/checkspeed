@@ -25,7 +25,6 @@ export default function Home() {
   }, []);
 
   const handleMeasureSpeed = (): void => {
-    console.log("click btn");
     fetchSpeed();
   };
 
@@ -48,9 +47,7 @@ export default function Home() {
               <h2 className="text-2xl font-semibold text-gray-400 mb-2">
                 Отправка
               </h2>
-              <p className="text-4xl font-bold text-white">
-                {uploadSpeed}
-              </p>
+              <p className="text-4xl font-bold text-white">{uploadSpeed}</p>
               <span className="text-2xl font-bold text-white">Мбит/с</span>
             </div>
           )}
@@ -69,9 +66,7 @@ export default function Home() {
               <h2 className="text-2xl font-semibold text-gray-400 mb-2">
                 Получение
               </h2>
-              <p className="text-4xl font-bold text-white">
-                {downloadSpeed}
-              </p>
+              <p className="text-4xl font-bold text-white">{downloadSpeed}</p>
               <span className="text-2xl font-bold text-white">Мбит/с</span>
             </div>
           )}

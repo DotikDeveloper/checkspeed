@@ -18,10 +18,10 @@
 Для запуска приложения с помощью Docker выполните следующие команды:
 
 ### Собрать образ
-docker build -t my-nextjs-app .
+docker build -t checkspeed .
 
 ### Запустить контейнер
-docker run -p 3000:3000 my-nextjs-app
+docker run -p 3000:3000 checkspeed
 
 После выполнения этих команд приложение будет доступно по адресу `http://localhost:3000`.
 

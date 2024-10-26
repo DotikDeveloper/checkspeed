@@ -1,19 +1,27 @@
 "use client";
 
+import { checkSpeed } from "@/utils/checkspeed";
 import { ISpeed } from "@/utils/types";
-import { useEffect, useState } from "react";
+import { use, useEffect, useMemo, useState } from "react";
 
 export default function Home() {
   const [speed, setSpeed] = useState<ISpeed | null>(null);
 
-  setTimeout(() => {
-      setSpeed({ speedUpload: 100, speedDownload: 90, ping: 3 });
-  }, 3000);
+  // запуск функции расчета скорости загрузки
+
+  const fetchSpeed = async () => {
+    let speedRes = await checkSpeed();
+    setSpeed(speedRes);
+  };
+
+  useEffect(() => {
+    fetchSpeed();
+  });
 
   const handleMeasureSpeed = (): void => {
     console.log("click btn");
-    window.location.reload();
-  }
+    fetchSpeed();
+  };
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
@@ -21,13 +29,19 @@ export default function Home() {
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-8">
           {!speed ? (
             <div className="bg-gray-800 rounded-lg p-6 text-center">
-              <h2 className="text-2xl font-semibold text-gray-400 mb-2">Отправка</h2>
-              <div className="h-10 w-32 text-4xl font-bold text-white mx-auto animate-pulse">000</div>
+              <h2 className="text-2xl font-semibold text-gray-400 mb-2">
+                Отправка
+              </h2>
+              <div className="h-10 w-32 text-4xl font-bold text-white mx-auto animate-pulse">
+                000
+              </div>
               <span className="text-2xl font-bold text-white">Мбит/с</span>
             </div>
           ) : (
             <div className="bg-gray-800 rounded-lg p-6 text-center">
-              <h2 className="text-2xl font-semibold text-gray-400 mb-2">Отправка</h2>
+              <h2 className="text-2xl font-semibold text-gray-400 mb-2">
+                Отправка
+              </h2>
               <p className="text-4xl font-bold text-white">
                 {speed.speedUpload.toFixed(2)}
               </p>
@@ -36,13 +50,19 @@ export default function Home() {
           )}
           {!speed ? (
             <div className="bg-gray-800 rounded-lg p-6 text-center">
-              <h2 className="text-2xl font-semibold text-gray-400 mb-2">Получение</h2>
-              <div className="h-10 w-32 text-4xl font-bold text-white mx-auto animate-pulse">000</div>
+              <h2 className="text-2xl font-semibold text-gray-400 mb-2">
+                Получение
+              </h2>
+              <div className="h-10 w-32 text-4xl font-bold text-white mx-auto animate-pulse">
+                000
+              </div>
               <span className="text-2xl font-bold text-white">Мбит/с</span>
             </div>
           ) : (
             <div className="bg-gray-800 rounded-lg p-6 text-center">
-              <h2 className="text-2xl font-semibold text-gray-400 mb-2">Получение</h2>
+              <h2 className="text-2xl font-semibold text-gray-400 mb-2">
+                Получение
+              </h2>
               <p className="text-4xl font-bold text-white">
                 {speed.speedDownload.toFixed(2)}
               </p>
@@ -51,13 +71,19 @@ export default function Home() {
           )}
           {!speed ? (
             <div className="bg-gray-800 rounded-lg p-6 text-center">
-              <h2 className="text-2xl font-semibold text-gray-400 mb-2">Пинг</h2>
-              <div className="h-10 w-32 text-4xl font-bold text-white mx-auto animate-pulse">000</div>
+              <h2 className="text-2xl font-semibold text-gray-400 mb-2">
+                Пинг
+              </h2>
+              <div className="h-10 w-32 text-4xl font-bold text-white mx-auto animate-pulse">
+                000
+              </div>
               <span className="text-2xl font-bold text-white">мс</span>
             </div>
           ) : (
             <div className="bg-gray-800 rounded-lg p-6 text-center">
-              <h2 className="text-2xl font-semibold text-gray-400 mb-2">Пинг</h2>
+              <h2 className="text-2xl font-semibold text-gray-400 mb-2">
+                Пинг
+              </h2>
               <p className="text-4xl font-bold text-white">
                 {speed.ping.toFixed(0)}
               </p>
@@ -67,7 +93,7 @@ export default function Home() {
         </div>
         <button
           className="rounded-md px-12 py-3 text-lg font-medium text-white bg-blue-500 hover:bg-blue-600 transition duration-200"
-          onClick={(handleMeasureSpeed)}
+          onClick={handleMeasureSpeed}
         >
           Измерить
         </button>

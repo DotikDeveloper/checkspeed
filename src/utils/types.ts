@@ -3,3 +3,7 @@ export interface ISpeed {
   speedDownload: number;
   speedUpload: number;
 }
+
+export enum URL {
+  checkSpeed = "/api/check-speed",
+}

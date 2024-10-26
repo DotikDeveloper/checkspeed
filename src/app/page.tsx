@@ -1,22 +1,28 @@
 "use client";
 
-import { checkSpeed } from "@/utils/checkspeed";
-import { ISpeed } from "@/utils/types";
-import { use, useEffect, useMemo, useState } from "react";
+import {
+  testDownloadSpeed,
+  testPing,
+  testUploadSpeed,
+} from "@/utils/checkspeed";
+import { useEffect, useState } from "react";
 
 export default function Home() {
-  const [speed, setSpeed] = useState<ISpeed | null>(null);
+  const [downloadSpeed, setDownloadSpeed] = useState<number | null>(null);
+  const [uploadSpeed, setUploadSpeed] = useState<number | null>(null);
+  const [ping, setPing] = useState<number | null>(null);
 
   // запуск функции расчета скорости загрузки
 
   const fetchSpeed = async () => {
-    let speedRes = await checkSpeed();
-    setSpeed(speedRes);
+    setDownloadSpeed(await testDownloadSpeed());
+    setUploadSpeed(await testUploadSpeed());
+    setPing(await testPing());
   };
 
   useEffect(() => {
     fetchSpeed();
-  });
+  }, []);
 
   const handleMeasureSpeed = (): void => {
     console.log("click btn");
@@ -27,7 +33,7 @@ export default function Home() {
     <div className="flex flex-col items-center justify-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
       <main className="flex flex-col items-center gap-8">
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-8">
-          {!speed ? (
+          {!downloadSpeed ? (
             <div className="bg-gray-800 rounded-lg p-6 text-center">
               <h2 className="text-2xl font-semibold text-gray-400 mb-2">
                 Отправка
@@ -43,12 +49,12 @@ export default function Home() {
                 Отправка
               </h2>
               <p className="text-4xl font-bold text-white">
-                {speed.speedUpload.toFixed(2)}
+                {downloadSpeed}
               </p>
               <span className="text-2xl font-bold text-white">Мбит/с</span>
             </div>
           )}
-          {!speed ? (
+          {!uploadSpeed ? (
             <div className="bg-gray-800 rounded-lg p-6 text-center">
               <h2 className="text-2xl font-semibold text-gray-400 mb-2">
                 Получение
@@ -64,12 +70,12 @@ export default function Home() {
                 Получение
               </h2>
               <p className="text-4xl font-bold text-white">
-                {speed.speedDownload.toFixed(2)}
+                {uploadSpeed}
               </p>
               <span className="text-2xl font-bold text-white">Мбит/с</span>
             </div>
           )}
-          {!speed ? (
+          {!ping ? (
             <div className="bg-gray-800 rounded-lg p-6 text-center">
               <h2 className="text-2xl font-semibold text-gray-400 mb-2">
                 Пинг
@@ -84,9 +90,7 @@ export default function Home() {
               <h2 className="text-2xl font-semibold text-gray-400 mb-2">
                 Пинг
               </h2>
-              <p className="text-4xl font-bold text-white">
-                {speed.ping.toFixed(0)}
-              </p>
+              <p className="text-4xl font-bold text-white">{ping}</p>
               <span className="text-2xl font-bold text-white">мс</span>
             </div>
           )}

@@ -11,11 +11,14 @@ export async function testDownloadSpeed() {
     const duration = (endTime - startTime) / 1000; // В секундах
     const bitsLoaded = data.size * 8; // Размер в битах
     const speedMbps = bitsLoaded / (1024 * 1024) / duration; // Скорость в Mbps
+    const speedMbps = bitsLoaded / (1024 * 1024) / duration; // Скорость в Mbps
 
     speeds.push(speedMbps); // Сохраняем скорость
   }
 
   // Рассчитываем среднюю скорость
+  const averageSpeed =
+    speeds.reduce((acc, speed) => acc + speed, 0) / speeds.length;
   const averageSpeed =
     speeds.reduce((acc, speed) => acc + speed, 0) / speeds.length;
 
@@ -46,6 +49,8 @@ export async function testUploadSpeed() {
   }  
 
   // Рассчитываем среднюю скорость
+  const averageSpeed =
+    speeds.reduce((acc, speed) => acc + speed, 0) / speeds.length;
   const averageSpeed =
     speeds.reduce((acc, speed) => acc + speed, 0) / speeds.length;
 

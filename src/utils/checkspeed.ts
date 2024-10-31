@@ -1,10 +1,10 @@
 export async function testDownloadSpeed() {
-  const sizes = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]; // Размеры файлов в МБ
+  const sizes = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]; // Размеры файлов в КБ
   const speeds = [];
 
   for (const size of sizes) {
     const startTime = Date.now();
-    const response = await fetch(`/api/download?size=${size}`); // Запрос с указанием размера
+    const response = await fetch(`/api/download?size=${size * 1024}`); // Запрос с указанием размера в КБ
     const data = await response.blob();
     const endTime = Date.now();
 
@@ -23,14 +23,14 @@ export async function testDownloadSpeed() {
 }
 
 export async function testUploadSpeed() {
-  const sizes = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]; // Размеры файлов в МБ
+  const sizes = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]; // Размеры файлов в КБ
   const speeds = [];
 
   for (const size of sizes) {
-    const data = new Blob([new Uint8Array(size * 1024 * 1024).fill(97)], {
-      // Создаем файл размером size МБ
+    const data = new Blob([new Uint8Array(size * 1024).fill(97)], { // Создаем файл размером size КБ
       type: "application/octet-stream",
     });
+    
     const startTime = Date.now();
     await fetch("/api/upload", {
       method: "POST",
@@ -43,7 +43,7 @@ export async function testUploadSpeed() {
     const speedMbps = Math.round(bitsUploaded / (1024 * 1024) / duration); // Округление до целого числа
 
     speeds.push(speedMbps); // Сохраняем скорость
-  }
+  }  
 
   // Рассчитываем среднюю скорость
   const averageSpeed =
@@ -53,7 +53,7 @@ export async function testUploadSpeed() {
 }
 
 export async function testPing() {
-  const sizes = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]; // Размеры файлов в МБ
+  const sizes = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]; // Размеры файлов в КБ
   const latencies = [];
 
   for (const size of sizes) {

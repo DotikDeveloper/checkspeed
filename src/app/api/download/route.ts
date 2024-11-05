@@ -1,4 +1,4 @@
-export async function GET(req: Request) {
+export async function GET() {
   // Обрабатываем GET-запрос
   const sizeInMB = 5; // Размер файла в МБ
   const fileContent = new Uint8Array(sizeInMB * 1024 * 1024).fill(97); // Создаем массив размером 5 МБ

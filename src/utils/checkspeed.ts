@@ -55,7 +55,7 @@ export async function testPing() {
   const sizes = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]; // Размеры файлов в КБ
   const latencies = [];
 
-  for (const size of sizes) {
+  for (let i = 0; i < sizes.length; i++) {
     const pingStart = Date.now();
     await fetch("/api/download", { method: "HEAD" }); // Используем метод HEAD для легкого запроса
     const pingEnd = Date.now();

@@ -8,7 +8,8 @@ export async function POST(request: Request) {
     const size = Math.min(buffer.byteLength, 1 * 1024 * 1024);
     
     return NextResponse.json({ size });
-  } catch (error) {
+  } catch (err) {
+    console.error('Upload error:', err);
     return NextResponse.json({ error: 'Upload failed' }, { status: 500 });
   }
 }

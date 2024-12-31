@@ -1,12 +1,11 @@
 export async function GET() {
-  // Обрабатываем GET-запрос
-  const sizeInMB = 5; // Размер файла в МБ
-  const fileContent = new Uint8Array(sizeInMB * 1024 * 1024).fill(97); // Создаем массив размером 5 МБ
-  const response = new Response(fileContent, {
+  // Создаем буфер размером 1 МБ вместо большего размера
+  const buffer = Buffer.alloc(1 * 1024 * 1024, 'x');
+  
+  return new Response(buffer, {
     headers: {
-      "Content-Type": "application/octet-stream",
-      "Content-Length": fileContent.byteLength.toString(), // Преобразуем в строку
-    },
+      'Content-Type': 'application/octet-stream',
+      'Cache-Control': 'no-store'
+    }
   });
-  return response; // Возвращаем ответ с данными
 }

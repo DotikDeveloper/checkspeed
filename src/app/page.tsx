@@ -5,30 +5,39 @@ import {
   testPing,
   testUploadSpeed,
 } from "@/utils/checkspeed";
-import { useEffect, useState } from "react";
+import { startTransition, useCallback, useEffect, useState } from "react";
 
 export default function Home() {
   const [downloadSpeed, setDownloadSpeed] = useState<number | null>(null);
   const [uploadSpeed, setUploadSpeed] = useState<number | null>(null);
   const [ping, setPing] = useState<number | null>(null);
 
-  // запуск функции расчета скорости загрузки
+  const measureSpeed = useCallback(async () => {
+    startTransition(() => {
+      setDownloadSpeed(null);
+      setUploadSpeed(null);
+      setPing(null);
+    });
 
-  const fetchSpeed = async () => {
-    setDownloadSpeed(await testDownloadSpeed());
-    setUploadSpeed(await testUploadSpeed());
-    setPing(await testPing());
-  };
+    const [download, upload, latency] = await Promise.all([
+      testDownloadSpeed(),
+      testUploadSpeed(),
+      testPing(),
+    ]);
 
-  useEffect(() => {
-    fetchSpeed();
+    startTransition(() => {
+      setDownloadSpeed(download);
+      setUploadSpeed(upload);
+      setPing(latency);
+    });
   }, []);
 
+  useEffect(() => {
+    void measureSpeed();
+  }, [measureSpeed]);
+
   const handleMeasureSpeed = (): void => {
-    setDownloadSpeed(null);
-    setUploadSpeed(null);
-    setPing(null);
-    fetchSpeed();
+    void measureSpeed();
   };
 
   return (

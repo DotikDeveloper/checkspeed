@@ -236,37 +236,50 @@ export default function Home() {
           <div className="bg-gray-900 rounded-xl p-6 text-center border border-gray-800 shadow-md">
             <h2 className="text-2xl font-semibold text-gray-300 mb-2">Отдача</h2>
             {uploadAverage !== null ? (
-              <p className="text-4xl font-bold text-white">{uploadAverage}</p>
+              <>
+                <p className="text-4xl font-bold text-white">{uploadAverage}</p>
+                <span className="text-2xl font-bold text-white">Мбит/с</span>
+              </>
             ) : (
-              <div className="h-10 w-32 text-4xl font-bold text-white mx-auto animate-pulse">
-                000
-              </div>
+              <>
+                <div className="h-10 w-32 text-4xl font-bold text-white mx-auto animate-pulse">
+                  000
+                </div>
+                <span className="text-2xl font-bold text-white">Мбит/с</span>
+              </>
             )}
-            <span className="text-lg font-semibold text-gray-400">Мбит/с</span>
           </div>
-
           <div className="bg-gray-900 rounded-xl p-6 text-center border border-gray-800 shadow-md">
-            <h2 className="text-2xl font-semibold text-gray-300 mb-2">Загрузка</h2>
+            <h2 className="text-2xl font-semibold text-gray-300 mb-2">Получение</h2>
             {downloadAverage !== null ? (
-              <p className="text-4xl font-bold text-white">{downloadAverage}</p>
+              <>
+                <p className="text-4xl font-bold text-white">{downloadAverage}</p>
+                <span className="text-2xl font-bold text-white">Мбит/с</span>
+              </>
             ) : (
-              <div className="h-10 w-32 text-4xl font-bold text-white mx-auto animate-pulse">
-                000
-              </div>
+              <>
+                <div className="h-10 w-32 text-4xl font-bold text-white mx-auto animate-pulse">
+                  000
+                </div>
+                <span className="text-2xl font-bold text-white">Мбит/с</span>
+              </>
             )}
-            <span className="text-lg font-semibold text-gray-400">Мбит/с</span>
           </div>
-
           <div className="bg-gray-900 rounded-xl p-6 text-center border border-gray-800 shadow-md">
             <h2 className="text-2xl font-semibold text-gray-300 mb-2">Пинг</h2>
             {ping !== null ? (
-              <p className="text-4xl font-bold text-white">{ping}</p>
+              <>
+                <p className="text-4xl font-bold text-white">{ping}</p>
+                <span className="text-lg font-semibold text-gray-400">мс</span>
+              </>
             ) : (
-              <div className="h-10 w-32 text-4xl font-bold text-white mx-auto animate-pulse">
-                000
-              </div>
+              <>
+                <div className="h-10 w-32 text-4xl font-bold text-white mx-auto animate-pulse">
+                  000
+                </div>
+                <span className="text-lg font-semibold text-gray-400">мс</span>
+              </>
             )}
-            <span className="text-lg font-semibold text-gray-400">мс</span>
           </div>
         </div>
 

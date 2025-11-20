@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-const MAX_ALLOWED_BYTES = 10 * 1024 * 1024; // 10 МБ
+const MAX_ALLOWED_BYTES = 3 * 1024 * 1024; // 3 МБ
 
 const readRequestSize = async (request: Request): Promise<number> => {
   if (!request.body) {

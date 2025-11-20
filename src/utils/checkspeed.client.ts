@@ -1,6 +1,6 @@
 "use client";
 
-const FILE_SIZES_MB = [0.5, 1, 2, 5, 10] as const;
+const FILE_SIZES_MB = [0.5, 1, 2, 3] as const;
 const MEASUREMENTS_PER_SIZE = 3;
 const COLD_START_SKIP = 1;
 

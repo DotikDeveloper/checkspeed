@@ -49,3 +49,15 @@ describe('createUploadPayload', () => {
     expect(payload.byteLength).toBeCloseTo(0.5 * 1024 * 1024, 0);
   });
 });
+
+describe('createUploadPayload', () => {
+  it('создаёт буфер нужного размера', () => {
+    const payload = createUploadPayload(2);
+    expect(payload.byteLength).toBe(2 * 1024 * 1024);
+  });
+
+  it('поддерживает дробные значения мегабайт', () => {
+    const payload = createUploadPayload(0.5);
+    expect(payload.byteLength).toBeCloseTo(0.5 * 1024 * 1024, 0);
+  });
+});

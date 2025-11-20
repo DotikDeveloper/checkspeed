@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { averageWithoutColdStart, bytesToMbps, createUploadPayload } from './checkspeed.client';
+import { averageWithoutColdStart, bytesToMbps, createUploadPayload, median } from './checkspeed.client';
 
 describe('bytesToMbps', () => {
   it('конвертирует байты и секунды в Мбит/с', () => {
@@ -50,14 +50,18 @@ describe('createUploadPayload', () => {
   });
 });
 
-describe('createUploadPayload', () => {
-  it('создаёт буфер нужного размера', () => {
-    const payload = createUploadPayload(2);
-    expect(payload.byteLength).toBe(2 * 1024 * 1024);
+describe('median', () => {
+  it('возвращает средний элемент для нечётного количества значений', () => {
+    const result = median([30, 10, 20]);
+    expect(result).toBe(20);
   });
 
-  it('поддерживает дробные значения мегабайт', () => {
-    const payload = createUploadPayload(0.5);
-    expect(payload.byteLength).toBeCloseTo(0.5 * 1024 * 1024, 0);
+  it('усредняет два центральных элемента для чётного количества значений', () => {
+    const result = median([5, 10, 15, 20]);
+    expect(result).toBe(12.5);
+  });
+
+  it('возвращает 0 для пустого массива', () => {
+    expect(median([])).toBe(0);
   });
 });

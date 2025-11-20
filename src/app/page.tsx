@@ -4,7 +4,7 @@ import {
   testDownloadSpeed,
   testPing,
   testUploadSpeed,
-} from "@/utils/checkspeed";
+} from "@/utils/checkspeed.client";
 import {
   startTransition,
   useCallback,

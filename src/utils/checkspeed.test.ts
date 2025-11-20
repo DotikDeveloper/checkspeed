@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { averageWithoutColdStart, bytesToMbps, createUploadPayload } from './checkspeed';
+import { averageWithoutColdStart, bytesToMbps, createUploadPayload } from './checkspeed.client';
 
 describe('bytesToMbps', () => {
   it('конвертирует байты и секунды в Мбит/с', () => {

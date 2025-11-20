@@ -1,12 +1,36 @@
-import { NextResponse } from "next/server"; // Импортируем NextResponse
+import { NextResponse } from 'next/server';
+
+const MAX_ALLOWED_BYTES = 10 * 1024 * 1024; // 10 МБ
+
+const readRequestSize = async (request: Request): Promise<number> => {
+  if (!request.body) {
+    return 0;
+  }
+
+  const reader = request.body.getReader();
+  let totalBytes = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    if (!value) {
+      continue;
+    }
+
+    totalBytes += value.byteLength;
+    if (totalBytes > MAX_ALLOWED_BYTES) {
+      throw new Error('Payload exceeds allowed limit');
+    }
+  }
+
+  return totalBytes;
+};
 
 export async function POST(request: Request) {
-  // Обрабатываем POST-запрос
   try {
-    // Читаем только первый 1 МБ данных
-    const buffer = await request.arrayBuffer();
-    const size = Math.min(buffer.byteLength, 1 * 1024 * 1024);
-    
+    const size = await readRequestSize(request);
     return NextResponse.json({ size });
   } catch (err) {
     console.error('Upload error:', err);

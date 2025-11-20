@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { averageWithoutColdStart, bytesToMbps } from './checkspeed';
+import { averageWithoutColdStart, bytesToMbps, createUploadPayload } from './checkspeed';
 
 describe('bytesToMbps', () => {
   it('конвертирует байты и секунды в Мбит/с', () => {
@@ -35,5 +35,17 @@ describe('averageWithoutColdStart', () => {
   it('корректно работает без необходимости отбрасывать измерения', () => {
     const result = averageWithoutColdStart([15, 25, 35], 0);
     expect(result).toBeCloseTo(25, 5);
+  });
+});
+
+describe('createUploadPayload', () => {
+  it('создаёт буфер нужного размера', () => {
+    const payload = createUploadPayload(2);
+    expect(payload.byteLength).toBe(2 * 1024 * 1024);
+  });
+
+  it('поддерживает дробные значения мегабайт', () => {
+    const payload = createUploadPayload(0.5);
+    expect(payload.byteLength).toBeCloseTo(0.5 * 1024 * 1024, 0);
   });
 });

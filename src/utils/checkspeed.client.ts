@@ -6,6 +6,10 @@ const COLD_START_SKIP = 1;
 
 export const DOWNLOAD_ENDPOINT = '/api/download';
 export const UPLOAD_ENDPOINT = '/api/upload';
+export const PING_ENDPOINT = '/api/ping';
+
+const PING_ATTEMPTS = 10;
+const PING_PRECISION = 1;
 
 export const bytesToMbps = (bytesTransferred: number, durationSeconds: number): number => {
   if (durationSeconds <= 0 || bytesTransferred <= 0) {
@@ -176,22 +180,48 @@ export const testUploadSpeed = async (): Promise<number> => {
   return Math.round(overallAverage);
 };
 
-export async function testPing() {
-  const sizes = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]; // Размеры файлов в КБ
-  const latencies = [];
-
-  for (let i = 0; i < sizes.length; i++) {
-    const pingStart = Date.now();
-    await fetch("/api/download", { method: "HEAD" }); // Используем метод HEAD для легкого запроса
-    const pingEnd = Date.now();
-
-    const latency = pingEnd - pingStart;
-    latencies.push(latency); // Сохраняем задержку
+export const median = (values: number[]): number => {
+  if (!values.length) {
+    return 0;
   }
 
-  // Рассчитываем среднюю задержку
-  const averageLatency =
-    latencies.reduce((acc, latency) => acc + latency, 0) / latencies.length + 1;
+  const sorted = [...values].sort((a, b) => a - b);
+  const middleIndex = Math.floor(sorted.length / 2);
 
-  return parseFloat(averageLatency.toFixed(1)); // Возвращаем среднюю задержку с округлением
+  if (sorted.length % 2 === 0) {
+    return (sorted[middleIndex - 1] + sorted[middleIndex]) / 2;
+  }
+
+  return sorted[middleIndex];
+};
+
+const measurePingOnce = async (): Promise<number> => {
+  const requestStart = performance.now();
+  const response = await fetch(PING_ENDPOINT, {
+    method: 'HEAD',
+    cache: 'no-store'
+  });
+
+  if (!response.ok) {
+    throw new Error(`Ping request failed with status ${response.status}`);
+  }
+
+  const requestEnd = performance.now();
+  return requestEnd - requestStart;
+};
+
+export async function testPing(): Promise<number> {
+  const rawMeasurements: number[] = [];
+
+  for (let attempt = 0; attempt < PING_ATTEMPTS; attempt += 1) {
+    const latency = await measurePingOnce();
+    rawMeasurements.push(latency);
+  }
+
+  const trimmedMeasurements =
+    rawMeasurements.length > 2 ? rawMeasurements.slice(1, rawMeasurements.length - 1) : rawMeasurements;
+
+  const representativeLatency = median(trimmedMeasurements);
+
+  return Number(representativeLatency.toFixed(PING_PRECISION));
 }

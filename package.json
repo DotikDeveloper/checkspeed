@@ -1,7 +1,7 @@
 {
   "name": "checkspeed",
   "description": "Check speed of internet connection",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "private": true,
   "author": {
     "name": "Sergei Popov",

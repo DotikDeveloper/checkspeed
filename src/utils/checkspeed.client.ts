@@ -1,5 +1,9 @@
 "use client";
 
+import { average, averageWithoutColdStart, median, removeOutliers } from './stats';
+
+export { average, averageWithoutColdStart, median, removeOutliers };
+
 const FILE_SIZES_MB = [0.5, 1, 2, 3] as const;
 const MEASUREMENTS_PER_SIZE = 3;
 const COLD_START_SKIP = 1;
@@ -18,17 +22,6 @@ export const bytesToMbps = (bytesTransferred: number, durationSeconds: number): 
 
   const megabits = (bytesTransferred * 8) / (1024 * 1024);
   return megabits / durationSeconds;
-};
-
-export const averageWithoutColdStart = (values: number[], dropCount = COLD_START_SKIP): number => {
-  if (!values.length) {
-    return 0;
-  }
-
-  const startIndex = Math.min(dropCount, values.length - 1);
-  const filtered = values.slice(startIndex);
-  const sum = filtered.reduce((acc, value) => acc + value, 0);
-  return sum / filtered.length;
 };
 
 const buildDownloadUrl = (sizeMb: number) => `${DOWNLOAD_ENDPOINT}?size=${sizeMb}`;
@@ -87,11 +80,12 @@ export const testDownloadSpeed = async (): Promise<number> => {
       const speed = await measureDownloadOnce(sizeMb);
       measurements.push(speed);
     }
-    aggregatedSpeeds.push(averageWithoutColdStart(measurements));
+    const cleanedMeasurements = removeOutliers(measurements);
+    aggregatedSpeeds.push(averageWithoutColdStart(cleanedMeasurements, COLD_START_SKIP));
   }
 
-  const overallAverage =
-    aggregatedSpeeds.reduce((acc, speed) => acc + speed, 0) / aggregatedSpeeds.length;
+  const cleanedAggregated = removeOutliers(aggregatedSpeeds);
+  const overallAverage = average(cleanedAggregated);
 
   return Math.round(overallAverage);
 };
@@ -171,28 +165,14 @@ export const testUploadSpeed = async (): Promise<number> => {
       const speed = await measureUploadOnce(sizeMb);
       measurements.push(speed);
     }
-    aggregatedSpeeds.push(averageWithoutColdStart(measurements));
+    const cleanedMeasurements = removeOutliers(measurements);
+    aggregatedSpeeds.push(averageWithoutColdStart(cleanedMeasurements, COLD_START_SKIP));
   }
 
-  const overallAverage =
-    aggregatedSpeeds.reduce((acc, speed) => acc + speed, 0) / aggregatedSpeeds.length;
+  const cleanedAggregated = removeOutliers(aggregatedSpeeds);
+  const overallAverage = average(cleanedAggregated);
 
   return Math.round(overallAverage);
-};
-
-export const median = (values: number[]): number => {
-  if (!values.length) {
-    return 0;
-  }
-
-  const sorted = [...values].sort((a, b) => a - b);
-  const middleIndex = Math.floor(sorted.length / 2);
-
-  if (sorted.length % 2 === 0) {
-    return (sorted[middleIndex - 1] + sorted[middleIndex]) / 2;
-  }
-
-  return sorted[middleIndex];
 };
 
 const measurePingOnce = async (): Promise<number> => {
@@ -221,7 +201,8 @@ export async function testPing(): Promise<number> {
   const trimmedMeasurements =
     rawMeasurements.length > 2 ? rawMeasurements.slice(1, rawMeasurements.length - 1) : rawMeasurements;
 
-  const representativeLatency = median(trimmedMeasurements);
+  const cleanedMeasurements = removeOutliers(trimmedMeasurements);
+  const representativeLatency = median(cleanedMeasurements);
 
   return Number(representativeLatency.toFixed(PING_PRECISION));
 }

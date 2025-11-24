@@ -1,7 +1,183 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { bytesToMbps, createUploadPayload } from './checkspeed.client';
+import { bytesToMbps, createUploadPayload, testDownloadSpeed, testPing, testUploadSpeed } from './checkspeed.client';
 import { average, averageWithoutColdStart, median, removeOutliers } from './stats';
+
+const DOWNLOAD_BYTES_TOTAL = 1024 * 1024;
+const DOWNLOAD_CHUNK_BYTES = DOWNLOAD_BYTES_TOTAL / 2;
+const FILE_SIZES_MB = [0.5, 1, 2, 3] as const;
+const MEASUREMENTS_PER_SIZE = 3;
+const PING_ATTEMPTS = 10;
+const globalWithXhr = globalThis as typeof globalThis & { XMLHttpRequest?: typeof XMLHttpRequest };
+const originalFetch = globalThis.fetch;
+const originalXMLHttpRequest = globalWithXhr.XMLHttpRequest;
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  globalThis.fetch = originalFetch;
+
+  if (originalXMLHttpRequest) {
+    globalWithXhr.XMLHttpRequest = originalXMLHttpRequest;
+  } else {
+    Reflect.deleteProperty(globalWithXhr, 'XMLHttpRequest');
+  }
+});
+
+const SPEED_MATRIX: number[][] = [
+  [10, 50, 60],
+  [15, 70, 75],
+  [20, 80, 90],
+  [25, 100, 110]
+];
+
+const EXPECTED_AGGREGATED_SPEED = 79;
+const MEASUREMENT_COUNT = FILE_SIZES_MB.length * MEASUREMENTS_PER_SIZE;
+
+const downloadDurationsMs = SPEED_MATRIX.flat().map((speed) => (8 / speed) * 1000);
+const uploadDurationsMs = SPEED_MATRIX.flatMap((group, index) =>
+  group.map((speed) => ((FILE_SIZES_MB[index] * 8) / speed) * 1000)
+);
+
+function queuePerformanceTimeline(durations: number[]) {
+  const values: number[] = [];
+  let cursor = 0;
+
+  durations.forEach((duration) => {
+    values.push(cursor);
+    cursor += duration;
+    values.push(cursor);
+    cursor += 5;
+  });
+
+  return vi.spyOn(performance, 'now').mockImplementation(() => {
+    if (!values.length) {
+      throw new Error('Очередь performance.now пуста');
+    }
+    return values.shift()!;
+  });
+}
+
+function createDownloadResponse() {
+  return {
+    ok: true,
+    body: {
+      getReader: () => createChunkReader()
+    }
+  } as unknown as Response;
+}
+
+function createChunkReader(chunkCount = 2) {
+  let delivered = 0;
+  return {
+    async read() {
+      if (delivered >= chunkCount) {
+        return { done: true, value: undefined as Uint8Array | undefined };
+      }
+      delivered += 1;
+      return { done: false, value: new Uint8Array(DOWNLOAD_CHUNK_BYTES) };
+    }
+  };
+}
+
+function mockDownloadFetch() {
+  const fetchMock = vi.fn().mockImplementation(async () => createDownloadResponse());
+  globalThis.fetch = fetchMock as typeof globalThis.fetch;
+  return fetchMock;
+}
+
+type UploadScenario = {
+  failWith?: 'upload-error' | 'upload-abort' | 'request-error' | 'timeout';
+  status?: number;
+};
+
+class MockUploadEventTarget {
+  private listeners = new Map<string, Set<(event: Event) => void>>();
+
+  addEventListener(type: string, listener: (event: Event) => void) {
+    if (!this.listeners.has(type)) {
+      this.listeners.set(type, new Set());
+    }
+    this.listeners.get(type)!.add(listener);
+  }
+
+  removeEventListener(type: string, listener: (event: Event) => void) {
+    this.listeners.get(type)?.delete(listener);
+  }
+
+  dispatch(type: string) {
+    const event = { type } as Event;
+    this.listeners.get(type)?.forEach((listener) => listener(event));
+  }
+}
+
+class MockXMLHttpRequest {
+  static scenarios: UploadScenario[] = [];
+  upload = new MockUploadEventTarget();
+  responseType = '';
+  status = 200;
+
+  private listeners = new Map<string, Set<(event: Event) => void>>();
+  private scenario: UploadScenario;
+
+  constructor() {
+    const scenario = MockXMLHttpRequest.scenarios.shift();
+    if (!scenario) {
+      throw new Error('Не определён сценарий загрузки');
+    }
+    this.scenario = scenario;
+    if (typeof scenario.status === 'number') {
+      this.status = scenario.status;
+    }
+  }
+
+  open() {}
+
+  addEventListener(type: string, listener: (event: Event) => void) {
+    if (!this.listeners.has(type)) {
+      this.listeners.set(type, new Set());
+    }
+    this.listeners.get(type)!.add(listener);
+  }
+
+  removeEventListener(type: string, listener: (event: Event) => void) {
+    this.listeners.get(type)?.delete(listener);
+  }
+
+  private dispatch(type: string) {
+    const event = { type } as Event;
+    this.listeners.get(type)?.forEach((listener) => listener(event));
+  }
+
+  send() {
+    const { failWith } = this.scenario;
+
+    if (failWith === 'upload-error') {
+      this.upload.dispatch('error');
+      return;
+    }
+    if (failWith === 'upload-abort') {
+      this.upload.dispatch('abort');
+      return;
+    }
+    if (failWith === 'request-error') {
+      this.dispatch('error');
+      return;
+    }
+    if (failWith === 'timeout') {
+      this.dispatch('timeout');
+      return;
+    }
+
+    this.upload.dispatch('loadstart');
+    this.upload.dispatch('loadend');
+    this.dispatch('load');
+  }
+}
+
+function stubXmlHttpRequest(scenarios: UploadScenario[]) {
+  MockXMLHttpRequest.scenarios = [...scenarios];
+  globalWithXhr.XMLHttpRequest = MockXMLHttpRequest as unknown as typeof XMLHttpRequest;
+}
 
 describe('bytesToMbps', () => {
   it('конвертирует байты и секунды в Мбит/с', () => {
@@ -36,6 +212,11 @@ describe('averageWithoutColdStart', () => {
   it('корректно работает без необходимости отбрасывать измерения', () => {
     const result = averageWithoutColdStart([15, 25, 35], 0);
     expect(result).toBeCloseTo(25, 5);
+  });
+
+  it('использует значение по умолчанию для dropCount', () => {
+    const result = averageWithoutColdStart([10, 20, 30]);
+    expect(result).toBe(25);
   });
 });
 
@@ -129,24 +310,107 @@ describe('removeOutliers', () => {
   });
 });
 
-describe('averageWithoutColdStart', () => {
-  it('отбрасывает первое измерение и усредняет остальные', () => {
-    const result = averageWithoutColdStart([10, 20, 30], 1);
-    expect(result).toBe(25);
+describe('testDownloadSpeed', () => {
+  it('агрегирует результаты измерений и округляет итоговую скорость', async () => {
+    const fetchMock = mockDownloadFetch();
+    queuePerformanceTimeline(downloadDurationsMs);
+
+    const result = await testDownloadSpeed();
+
+    expect(result).toBe(EXPECTED_AGGREGATED_SPEED);
+    expect(fetchMock).toHaveBeenCalledTimes(MEASUREMENT_COUNT);
   });
 
-  it('не допускает пустого набора данных после отбрасывания', () => {
-    const result = averageWithoutColdStart([15], 1);
-    expect(result).toBe(15);
+  it('пробрасывает ошибку, если загрузка завершилась неуспешно', async () => {
+    const failingFetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 503
+    } as Response);
+    globalThis.fetch = failingFetch as typeof globalThis.fetch;
+
+    await expect(testDownloadSpeed()).rejects.toThrow('Download request failed with status 503');
   });
 
-  it('корректно работает без необходимости отбрасывать измерения', () => {
-    const result = averageWithoutColdStart([15, 25, 35], 0);
-    expect(result).toBeCloseTo(25, 5);
+  it('прерывает измерения, если поток данных недоступен', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      body: null
+    } as Response);
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    await expect(testDownloadSpeed()).rejects.toThrow(
+      'Readable stream is not available for the download response.'
+    );
+  });
+});
+
+describe('testUploadSpeed', () => {
+  it('агрегирует измерения отдачи и возвращает округлённое значение', async () => {
+    queuePerformanceTimeline(uploadDurationsMs);
+    stubXmlHttpRequest(Array.from({ length: MEASUREMENT_COUNT }, () => ({})));
+
+    const result = await testUploadSpeed();
+
+    expect(result).toBe(EXPECTED_AGGREGATED_SPEED);
   });
 
-  it('использует значение по умолчанию для dropCount', () => {
-    const result = averageWithoutColdStart([10, 20, 30]);
-    expect(result).toBe(25);
+  it('пробрасывает ошибку при сбое загрузки файлов на сервер', async () => {
+    stubXmlHttpRequest([
+      { failWith: 'upload-error' },
+      ...Array.from({ length: MEASUREMENT_COUNT - 1 }, () => ({}))
+    ]);
+
+    await expect(testUploadSpeed()).rejects.toThrow('Upload failed during transmission');
+  });
+
+  it('прерывает измерения при отмене загрузки', async () => {
+    stubXmlHttpRequest([
+      { failWith: 'upload-abort' },
+      ...Array.from({ length: MEASUREMENT_COUNT - 1 }, () => ({}))
+    ]);
+
+    await expect(testUploadSpeed()).rejects.toThrow('Upload aborted');
+  });
+
+  it('пробрасывает ошибку сетевого запроса', async () => {
+    stubXmlHttpRequest([
+      { failWith: 'request-error', status: 504 },
+      ...Array.from({ length: MEASUREMENT_COUNT - 1 }, () => ({}))
+    ]);
+
+    await expect(testUploadSpeed()).rejects.toThrow('Upload request failed with status 504');
+  });
+
+  it('прерывает измерения при таймауте запроса', async () => {
+    stubXmlHttpRequest([
+      { failWith: 'timeout', status: 0 },
+      ...Array.from({ length: MEASUREMENT_COUNT - 1 }, () => ({}))
+    ]);
+
+    await expect(testUploadSpeed()).rejects.toThrow('Upload request failed with status 0');
+  });
+});
+
+describe('testPing', () => {
+  it('возвращает медианное значение задержки с округлением до десятых', async () => {
+    const latencies = [30, 28, 29, 31, 32, 33, 34, 35, 36, 37];
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true } as Response);
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+    queuePerformanceTimeline(latencies);
+
+    const result = await testPing();
+
+    expect(result).toBe(32.5);
+    expect(fetchMock).toHaveBeenCalledTimes(PING_ATTEMPTS);
+  });
+
+  it('пробрасывает ошибку для неуспешного ответа ping', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500
+    } as Response);
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    await expect(testPing()).rejects.toThrow('Ping request failed with status 500');
   });
 });

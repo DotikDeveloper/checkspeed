@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.5 — 24.11.2025
+
+- настроен Vitest с окружением jsdom и генерацией покрытия (`vitest.config.ts`), добавлены dev-зависимости `jsdom` и `@vitest/coverage-v8`;
+- реализованы детализированные unit-тесты для `testDownloadSpeed()`, `testUploadSpeed()` и `testPing()` с моками `fetch`/`XMLHttpRequest`/`performance.now`, проверкой расчётов и путей ошибок;
+- добавлены проверки покрытия (`vitest run --coverage` показывает 91.5% по `src/utils`) и чек-лист в `docs/improvements/04-GITHUB-TASKS.md`.
+
 ## 1.2.4 — 20.11.2025
 
 - создан модуль статистики `src/utils/stats.ts` с функциями `average()`, `median()`, `removeOutliers()` и `averageWithoutColdStart()`;

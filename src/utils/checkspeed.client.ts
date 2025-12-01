@@ -1,6 +1,7 @@
 "use client";
 
 import { average, averageWithoutColdStart, median, removeOutliers } from './stats';
+import { logger } from './logger';
 
 export { average, averageWithoutColdStart, median, removeOutliers };
 
@@ -32,19 +33,27 @@ export const createUploadPayload = (sizeMb: number): Uint8Array =>
   new Uint8Array(megabytesToBytes(sizeMb));
 
 const measureDownloadOnce = async (sizeMb: number): Promise<number> => {
+  const requestStart = performance.now();
+  logger.debug('download', `Начало измерения download для размера ${sizeMb} МБ`);
+
   const response = await fetch(buildDownloadUrl(sizeMb));
+  const ttfb = performance.now() - requestStart; // Time To First Byte
 
   if (!response.ok) {
+    logger.error('download', `Запрос завершился с ошибкой: ${response.status}`);
     throw new Error(`Download request failed with status ${response.status}`);
   }
   if (!response.body) {
+    logger.error('download', 'Поток данных недоступен');
     throw new Error('Readable stream is not available for the download response.');
   }
 
+  logger.debug('download', `TTFB: ${ttfb.toFixed(2)} мс`);
+
   const reader = response.body.getReader();
   let bytesTransferred = 0;
-  let startTime: number | null = null;
-  let lastChunkTime = 0;
+  let firstChunkTime: number | null = null;
+  let lastChunkTime = requestStart;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -56,51 +65,87 @@ const measureDownloadOnce = async (sizeMb: number): Promise<number> => {
     }
 
     const chunkTime = performance.now();
-    if (startTime === null) {
-      startTime = chunkTime;
+    if (firstChunkTime === null) {
+      firstChunkTime = chunkTime;
+      logger.debug('download', `Первый чанк получен через ${(chunkTime - requestStart).toFixed(2)} мс`);
     }
     lastChunkTime = chunkTime;
     bytesTransferred += value.byteLength;
   }
 
-  if (startTime === null || lastChunkTime <= startTime || bytesTransferred === 0) {
+  const totalDuration = lastChunkTime - requestStart;
+  const transferDuration = firstChunkTime ? lastChunkTime - firstChunkTime : totalDuration;
+
+  if (totalDuration <= 0 || bytesTransferred === 0) {
+    logger.warn('download', `Некорректные данные: duration=${totalDuration}ms, bytes=${bytesTransferred}`);
     return 0;
   }
 
-  const durationSeconds = (lastChunkTime - startTime) / 1000;
-  return bytesToMbps(bytesTransferred, durationSeconds);
+  // Используем общее время от начала запроса до конца передачи
+  const durationSeconds = totalDuration / 1000;
+  const speed = bytesToMbps(bytesTransferred, durationSeconds);
+
+  logger.info('download', `Измерение завершено`, {
+    sizeMb,
+    bytesTransferred,
+    totalDurationMs: totalDuration.toFixed(2),
+    transferDurationMs: transferDuration.toFixed(2),
+    ttfbMs: ttfb.toFixed(2),
+    speedMbps: speed.toFixed(2)
+  });
+
+  // Валидация: скорость не должна быть нереалистично высокой (>100 Гбит/с)
+  const MAX_REALISTIC_SPEED_MBPS = 100000;
+  if (speed > MAX_REALISTIC_SPEED_MBPS) {
+    logger.warn('download', `Подозрительно высокая скорость: ${speed.toFixed(2)} Мбит/с`);
+  }
+
+  return speed;
 };
 
 export const testDownloadSpeed = async (): Promise<number> => {
+  logger.info('download', 'Начало тестирования download скорости');
   const aggregatedSpeeds: number[] = [];
 
   for (const sizeMb of FILE_SIZES_MB) {
+    logger.debug('download', `Тестирование размера ${sizeMb} МБ`);
     const measurements: number[] = [];
     for (let attempt = 0; attempt < MEASUREMENTS_PER_SIZE; attempt += 1) {
       const speed = await measureDownloadOnce(sizeMb);
       measurements.push(speed);
+      logger.debug('download', `Попытка ${attempt + 1}/${MEASUREMENTS_PER_SIZE}: ${speed.toFixed(2)} Мбит/с`);
     }
     const cleanedMeasurements = removeOutliers(measurements);
-    aggregatedSpeeds.push(averageWithoutColdStart(cleanedMeasurements, COLD_START_SKIP));
+    const avgSpeed = averageWithoutColdStart(cleanedMeasurements, COLD_START_SKIP);
+    aggregatedSpeeds.push(avgSpeed);
+    logger.debug('download', `Средняя скорость для ${sizeMb} МБ: ${avgSpeed.toFixed(2)} Мбит/с`);
   }
 
   const cleanedAggregated = removeOutliers(aggregatedSpeeds);
   const overallAverage = average(cleanedAggregated);
+  const rounded = Math.round(overallAverage);
 
-  return Math.round(overallAverage);
+  logger.info('download', `Итоговая скорость: ${rounded} Мбит/с (среднее: ${overallAverage.toFixed(2)})`);
+
+  return rounded;
 };
 
 const measureUploadOnce = (sizeMb: number): Promise<number> =>
   new Promise((resolve, reject) => {
+    const requestStart = performance.now();
+    logger.debug('upload', `Начало измерения upload для размера ${sizeMb} МБ`);
+
     const payload = createUploadPayload(sizeMb);
     const xhr = new XMLHttpRequest();
 
     let startTime: number | null = null;
     let endTime: number | null = null;
+    let progressStartTime: number | null = null;
 
     const cleanup = () => {
       xhr.upload.removeEventListener('loadstart', handleLoadStart);
       xhr.upload.removeEventListener('loadend', handleLoadEnd);
+      xhr.upload.removeEventListener('progress', handleProgress);
       xhr.upload.removeEventListener('error', handleUploadError);
       xhr.upload.removeEventListener('abort', handleUploadAbort);
       xhr.removeEventListener('error', handleRequestError);
@@ -110,42 +155,72 @@ const measureUploadOnce = (sizeMb: number): Promise<number> =>
 
     const handleLoadStart = () => {
       startTime = performance.now();
+      logger.debug('upload', `Upload начат через ${(startTime - requestStart).toFixed(2)} мс после создания запроса`);
+    };
+
+    const handleProgress = (event: ProgressEvent) => {
+      if (progressStartTime === null && event.loaded > 0) {
+        progressStartTime = performance.now();
+        logger.debug('upload', `Первый байт отправлен через ${(progressStartTime - (startTime ?? requestStart)).toFixed(2)} мс`);
+      }
     };
 
     const handleLoadEnd = () => {
       endTime = performance.now();
+      logger.debug('upload', `Upload завершён, общее время: ${endTime - (startTime ?? requestStart)} мс`);
     };
 
     const handleUploadError = () => {
       cleanup();
+      logger.error('upload', 'Ошибка при передаче данных');
       reject(new Error('Upload failed during transmission'));
     };
 
     const handleUploadAbort = () => {
       cleanup();
+      logger.warn('upload', 'Upload отменён');
       reject(new Error('Upload aborted'));
     };
 
     const handleRequestError = () => {
       cleanup();
+      logger.error('upload', `Ошибка запроса: статус ${xhr.status}`);
       reject(new Error(`Upload request failed with status ${xhr.status}`));
     };
 
     const handleLoad = () => {
       cleanup();
       if (startTime === null || endTime === null || endTime <= startTime) {
+        logger.warn('upload', 'Некорректные временные метки');
         resolve(0);
         return;
       }
       const durationSeconds = (endTime - startTime) / 1000;
-      resolve(bytesToMbps(payload.byteLength, durationSeconds));
+      const speed = bytesToMbps(payload.byteLength, durationSeconds);
+
+      logger.info('upload', `Измерение завершено`, {
+        sizeMb,
+        bytesTransferred: payload.byteLength,
+        durationMs: (endTime - startTime).toFixed(2),
+        speedMbps: speed.toFixed(2)
+      });
+
+      // Валидация скорости
+      const MAX_REALISTIC_SPEED_MBPS = 100000;
+      if (speed > MAX_REALISTIC_SPEED_MBPS) {
+        logger.warn('upload', `Подозрительно высокая скорость: ${speed.toFixed(2)} Мбит/с`);
+      }
+
+      resolve(speed);
     };
 
     xhr.open('POST', UPLOAD_ENDPOINT);
     xhr.responseType = 'json';
+    xhr.timeout = 60000; // 60 секунд таймаут
 
     xhr.upload.addEventListener('loadstart', handleLoadStart);
     xhr.upload.addEventListener('loadend', handleLoadEnd);
+    xhr.upload.addEventListener('progress', handleProgress);
     xhr.upload.addEventListener('error', handleUploadError);
     xhr.upload.addEventListener('abort', handleUploadAbort);
     xhr.addEventListener('error', handleRequestError);
@@ -157,22 +232,30 @@ const measureUploadOnce = (sizeMb: number): Promise<number> =>
   });
 
 export const testUploadSpeed = async (): Promise<number> => {
+  logger.info('upload', 'Начало тестирования upload скорости');
   const aggregatedSpeeds: number[] = [];
 
   for (const sizeMb of FILE_SIZES_MB) {
+    logger.debug('upload', `Тестирование размера ${sizeMb} МБ`);
     const measurements: number[] = [];
     for (let attempt = 0; attempt < MEASUREMENTS_PER_SIZE; attempt += 1) {
       const speed = await measureUploadOnce(sizeMb);
       measurements.push(speed);
+      logger.debug('upload', `Попытка ${attempt + 1}/${MEASUREMENTS_PER_SIZE}: ${speed.toFixed(2)} Мбит/с`);
     }
     const cleanedMeasurements = removeOutliers(measurements);
-    aggregatedSpeeds.push(averageWithoutColdStart(cleanedMeasurements, COLD_START_SKIP));
+    const avgSpeed = averageWithoutColdStart(cleanedMeasurements, COLD_START_SKIP);
+    aggregatedSpeeds.push(avgSpeed);
+    logger.debug('upload', `Средняя скорость для ${sizeMb} МБ: ${avgSpeed.toFixed(2)} Мбит/с`);
   }
 
   const cleanedAggregated = removeOutliers(aggregatedSpeeds);
   const overallAverage = average(cleanedAggregated);
+  const rounded = Math.round(overallAverage);
 
-  return Math.round(overallAverage);
+  logger.info('upload', `Итоговая скорость: ${rounded} Мбит/с (среднее: ${overallAverage.toFixed(2)})`);
+
+  return rounded;
 };
 
 const measurePingOnce = async (): Promise<number> => {
@@ -183,26 +266,45 @@ const measurePingOnce = async (): Promise<number> => {
   });
 
   if (!response.ok) {
+    logger.error('ping', `Запрос завершился с ошибкой: ${response.status}`);
     throw new Error(`Ping request failed with status ${response.status}`);
   }
 
   const requestEnd = performance.now();
-  return requestEnd - requestStart;
+  const latency = requestEnd - requestStart;
+
+  // Валидация: пинг не должен быть отрицательным или нереалистично большим (>10 секунд)
+  if (latency < 0 || latency > 10000) {
+    logger.warn('ping', `Подозрительное значение пинга: ${latency.toFixed(2)} мс`);
+  }
+
+  return latency;
 };
 
 export async function testPing(): Promise<number> {
+  logger.info('ping', 'Начало тестирования ping');
   const rawMeasurements: number[] = [];
 
   for (let attempt = 0; attempt < PING_ATTEMPTS; attempt += 1) {
     const latency = await measurePingOnce();
     rawMeasurements.push(latency);
+    logger.debug('ping', `Попытка ${attempt + 1}/${PING_ATTEMPTS}: ${latency.toFixed(2)} мс`);
   }
+
+  logger.debug('ping', `Сырые измерения: ${rawMeasurements.map(v => v.toFixed(2)).join(', ')} мс`);
 
   const trimmedMeasurements =
     rawMeasurements.length > 2 ? rawMeasurements.slice(1, rawMeasurements.length - 1) : rawMeasurements;
 
-  const cleanedMeasurements = removeOutliers(trimmedMeasurements);
-  const representativeLatency = median(cleanedMeasurements);
+  logger.debug('ping', `После обрезки: ${trimmedMeasurements.map(v => v.toFixed(2)).join(', ')} мс`);
 
-  return Number(representativeLatency.toFixed(PING_PRECISION));
+  const cleanedMeasurements = removeOutliers(trimmedMeasurements);
+  logger.debug('ping', `После удаления выбросов: ${cleanedMeasurements.map(v => v.toFixed(2)).join(', ')} мс`);
+
+  const representativeLatency = median(cleanedMeasurements);
+  const rounded = Number(representativeLatency.toFixed(PING_PRECISION));
+
+  logger.info('ping', `Итоговый пинг: ${rounded} мс (медиана: ${representativeLatency.toFixed(2)})`);
+
+  return rounded;
 }

@@ -13,10 +13,14 @@ interface LogEntry {
   data?: unknown;
 }
 
+// Версия приложения (можно переопределить через переменную окружения)
+const APP_VERSION = process.env.NEXT_PUBLIC_APP_VERSION || '1.3.0';
+
 class SpeedLogger {
   private enabled: boolean;
   private logs: LogEntry[] = [];
   private maxLogs = 1000;
+  private versionLogged = false;
 
   constructor() {
     // Включаем логирование если:
@@ -39,6 +43,13 @@ class SpeedLogger {
   private log(level: LogLevel, category: string, message: string, data?: unknown): void {
     if (!this.enabled) {
       return;
+    }
+
+    // Выводим версию приложения при первом логировании
+    if (!this.versionLogged) {
+      const versionMessage = `CheckSpeed v${APP_VERSION} - логирование включено`;
+      console.log(`%c${versionMessage}`, 'color: #4CAF50; font-weight: bold; font-size: 12px;');
+      this.versionLogged = true;
     }
 
     const entry: LogEntry = {

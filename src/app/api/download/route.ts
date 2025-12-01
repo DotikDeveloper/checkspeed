@@ -25,15 +25,17 @@ export async function GET(request: NextRequest) {
   const buffer = bufferPool.get(sizeBytes);
   buffer.fill('x');
 
-  // Важно: Response скопирует содержимое, поэтому мы можем сразу вернуть буфер в пул.
-  const response = new Response(buffer as unknown as BodyInit, {
+  // Создаём копию буфера для Response, чтобы избежать гонки данных при параллельных запросах.
+  // Response не копирует содержимое, а использует ссылку, поэтому нужна явная копия.
+  const bufferCopy = Buffer.from(buffer);
+  bufferPool.release(buffer);
+
+  const response = new Response(bufferCopy as unknown as BodyInit, {
     headers: {
       'Content-Type': 'application/octet-stream',
       'Cache-Control': 'no-store'
     }
   });
-
-  bufferPool.release(buffer);
 
   return response;
 }

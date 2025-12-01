@@ -228,6 +228,12 @@ const measureUploadOnce = (sizeMb: number): Promise<number> =>
       resolve(speed);
     };
 
+    const handleTimeout = () => {
+      cleanup();
+      logger.error('upload', 'Запрос превысил таймаут (30 секунд)');
+      reject(new Error('Upload request timed out after 30 seconds'));
+    };
+
     const cleanup = () => {
       xhr.upload.removeEventListener('loadstart', handleLoadStart);
       xhr.upload.removeEventListener('loadend', handleLoadEnd);
@@ -237,12 +243,6 @@ const measureUploadOnce = (sizeMb: number): Promise<number> =>
       xhr.removeEventListener('error', handleRequestError);
       xhr.removeEventListener('timeout', handleTimeout);
       xhr.removeEventListener('load', handleLoad);
-    };
-
-    const handleTimeout = () => {
-      cleanup();
-      logger.error('upload', 'Запрос превысил таймаут (30 секунд)');
-      reject(new Error('Upload request timed out after 30 seconds'));
     };
 
     xhr.open('POST', UPLOAD_ENDPOINT);

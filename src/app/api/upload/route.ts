@@ -3,6 +3,32 @@ import { NextResponse } from 'next/server';
 const MAX_ALLOWED_BYTES = 3 * 1024 * 1024; // 3 МБ
 
 /**
+ * Потребляет тело запроса полностью, чтобы избежать проблем в serverless окружениях.
+ * Не читает данные, только потребляет поток.
+ */
+const consumeRequestBody = async (request: Request): Promise<void> => {
+  if (!request.body) {
+    return;
+  }
+
+  const reader = request.body.getReader();
+  try {
+    while (true) {
+      const { done } = await reader.read();
+      if (done) {
+        break;
+      }
+    }
+  } finally {
+    try {
+      await reader.cancel();
+    } catch {
+      // Игнорируем ошибки при отмене
+    }
+  }
+};
+
+/**
  * Оптимизированное чтение размера запроса.
  * Читаем только первые чанки для проверки размера, затем отменяем чтение.
  */
@@ -50,11 +76,37 @@ export async function POST(request: Request) {
     const contentLength = request.headers.get('content-length');
     if (contentLength) {
       const size = parseInt(contentLength, 10);
+      
+      // Валидация: проверяем, что Content-Length является валидным числом
+      if (isNaN(size) || size < 0) {
+        // Если Content-Length невалиден, потребляем тело и возвращаем ошибку
+        // Ошибки от consumeRequestBody не должны влиять на статус-код ответа
+        try {
+          await consumeRequestBody(request);
+        } catch {
+          // Игнорируем ошибки при потреблении тела, но все равно возвращаем правильный статус
+        }
+        return NextResponse.json({ error: 'Invalid Content-Length header' }, { status: 400 });
+      }
+      
       if (size > MAX_ALLOWED_BYTES) {
+        // Потребляем тело запроса перед возвратом ошибки
+        // Ошибки от consumeRequestBody не должны влиять на статус-код ответа
+        try {
+          await consumeRequestBody(request);
+        } catch {
+          // Игнорируем ошибки при потреблении тела, но все равно возвращаем правильный статус
+        }
         return NextResponse.json({ error: 'Payload exceeds allowed limit' }, { status: 413 });
       }
-      // Если Content-Length доступен, используем его вместо чтения потока
-      // Это значительно быстрее для больших файлов
+      
+      // Если Content-Length доступен и валиден, используем его вместо чтения потока
+      // Но все равно потребляем тело запроса, чтобы избежать проблем в serverless окружениях
+      try {
+        await consumeRequestBody(request);
+      } catch {
+        // Игнорируем ошибки при потреблении тела, но продолжаем выполнение
+      }
       return NextResponse.json({ size });
     }
 
@@ -63,6 +115,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ size });
   } catch (err) {
     console.error('Upload error:', err);
+    // Пытаемся потреблять тело запроса даже при ошибке
+    try {
+      await consumeRequestBody(request);
+    } catch {
+      // Игнорируем ошибки при потреблении тела
+    }
+    
     if (err instanceof Error && err.message.includes('exceeds')) {
       return NextResponse.json({ error: 'Payload exceeds allowed limit' }, { status: 413 });
     }

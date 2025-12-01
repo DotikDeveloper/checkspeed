@@ -178,19 +178,39 @@ const measureUploadOnce = (sizeMb: number): Promise<number> =>
       logger.debug('upload', `Upload завершён, общее время: ${endTime - (startTime ?? requestStart)} мс`);
     };
 
-    const handleUploadError = () => {
+    // Объявляем обработчики, которые вызывают cleanup
+    let handleUploadError: () => void;
+    let handleUploadAbort: () => void;
+    let handleRequestError: () => void;
+    let handleLoad: () => void;
+    let handleTimeout: () => void;
+
+    // Определяем cleanup перед обработчиками, которые её используют
+    // Используем function declaration для hoisting
+    function cleanup() {
+      xhr.upload.removeEventListener('loadstart', handleLoadStart);
+      xhr.upload.removeEventListener('loadend', handleLoadEnd);
+      xhr.upload.removeEventListener('progress', handleProgress);
+      xhr.upload.removeEventListener('error', handleUploadError);
+      xhr.upload.removeEventListener('abort', handleUploadAbort);
+      xhr.removeEventListener('error', handleRequestError);
+      xhr.removeEventListener('timeout', handleTimeout);
+      xhr.removeEventListener('load', handleLoad);
+    }
+
+    handleUploadError = () => {
       cleanup();
       logger.error('upload', 'Ошибка при передаче данных');
       reject(new Error('Upload failed during transmission'));
     };
 
-    const handleUploadAbort = () => {
+    handleUploadAbort = () => {
       cleanup();
       logger.warn('upload', 'Upload отменён');
       reject(new Error('Upload aborted'));
     };
 
-    const handleRequestError = () => {
+    handleRequestError = () => {
       cleanup();
       // Статус 0 обычно означает таймаут или сетевая ошибка
       if (xhr.status === 0) {
@@ -202,7 +222,7 @@ const measureUploadOnce = (sizeMb: number): Promise<number> =>
       }
     };
 
-    const handleLoad = () => {
+    handleLoad = () => {
       cleanup();
       if (startTime === null || endTime === null || endTime <= startTime) {
         logger.warn('upload', 'Некорректные временные метки');
@@ -228,21 +248,10 @@ const measureUploadOnce = (sizeMb: number): Promise<number> =>
       resolve(speed);
     };
 
-    const handleTimeout = () => {
+    handleTimeout = () => {
       cleanup();
       logger.error('upload', 'Запрос превысил таймаут (30 секунд)');
       reject(new Error('Upload request timed out after 30 seconds'));
-    };
-
-    const cleanup = () => {
-      xhr.upload.removeEventListener('loadstart', handleLoadStart);
-      xhr.upload.removeEventListener('loadend', handleLoadEnd);
-      xhr.upload.removeEventListener('progress', handleProgress);
-      xhr.upload.removeEventListener('error', handleUploadError);
-      xhr.upload.removeEventListener('abort', handleUploadAbort);
-      xhr.removeEventListener('error', handleRequestError);
-      xhr.removeEventListener('timeout', handleTimeout);
-      xhr.removeEventListener('load', handleLoad);
     };
 
     xhr.open('POST', UPLOAD_ENDPOINT);

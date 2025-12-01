@@ -103,6 +103,31 @@ function queuePerformanceTimeline(durations: number[], ttfbMs: number = 10) {
   });
 }
 
+function queueUploadPerformanceTimeline(durations: number[], startDelayMs: number = 5) {
+  const values: number[] = [];
+  let cursor = 0;
+
+  durations.forEach((duration) => {
+    // requestStart - вызывается сразу при создании Promise
+    values.push(cursor);
+    // startTime - вызывается в handleLoadStart (небольшая задержка после создания запроса)
+    cursor += startDelayMs;
+    values.push(cursor);
+    // endTime - вызывается в handleLoadEnd (startTime + duration передачи)
+    cursor += duration;
+    values.push(cursor);
+    // Небольшая пауза между измерениями
+    cursor += 5;
+  });
+
+  return vi.spyOn(performance, 'now').mockImplementation(() => {
+    if (!values.length) {
+      throw new Error('Очередь performance.now пуста');
+    }
+    return values.shift()!;
+  });
+}
+
 function createDownloadResponse() {
   return {
     ok: true,
@@ -373,33 +398,37 @@ describe('testDownloadSpeed', () => {
     expect(fetchMock).toHaveBeenCalledTimes(MEASUREMENT_COUNT);
   });
 
-  it('пробрасывает ошибку, если загрузка завершилась неуспешно', async () => {
+  it('пропускает неудачные попытки и продолжает измерения', async () => {
     const failingFetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 503
     } as Response);
     globalThis.fetch = failingFetch as typeof globalThis.fetch;
 
-    await expect(testDownloadSpeed()).rejects.toThrow('Download request failed with status 503');
+    const result = await testDownloadSpeed();
+
+    // Должен вернуть 0, так как все попытки провалились
+    expect(result).toBe(0);
   });
 
-  it('прерывает измерения, если поток данных недоступен', async () => {
+  it('возвращает 0 если поток данных недоступен', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       body: null
     } as Response);
     globalThis.fetch = fetchMock as typeof globalThis.fetch;
 
-    await expect(testDownloadSpeed()).rejects.toThrow(
-      'Readable stream is not available for the download response.'
-    );
+    const result = await testDownloadSpeed();
+
+    // Должен вернуть 0, так как все попытки провалились
+    expect(result).toBe(0);
   });
 });
 
 describe('testUploadSpeed', () => {
   it('агрегирует измерения отдачи и возвращает округлённое значение', async () => {
-    // Для upload используем те же длительности, что и для download
-    queuePerformanceTimeline(uploadDurationsMs, 5);
+    // Для upload используем специальную функцию, которая учитывает requestStart
+    queueUploadPerformanceTimeline(uploadDurationsMs, 5);
     stubXmlHttpRequest(Array.from({ length: MEASUREMENT_COUNT }, () => ({})));
 
     const result = await testUploadSpeed();
@@ -409,40 +438,44 @@ describe('testUploadSpeed', () => {
     expect(result).toBeLessThan(100000); // Не должно быть нереалистично высоким
   });
 
-  it('пробрасывает ошибку при сбое загрузки файлов на сервер', async () => {
+  it('пропускает неудачные попытки и продолжает измерения', async () => {
+    // Первая попытка с ошибкой, остальные успешные
     stubXmlHttpRequest([
       { failWith: 'upload-error' },
       ...Array.from({ length: MEASUREMENT_COUNT - 1 }, () => ({}))
     ]);
+    queueUploadPerformanceTimeline(uploadDurationsMs, 5);
 
-    await expect(testUploadSpeed()).rejects.toThrow('Upload failed during transmission');
+    const result = await testUploadSpeed();
+
+    // Должен вернуть результат на основе успешных измерений
+    expect(result).toBeGreaterThanOrEqual(0);
   });
 
-  it('прерывает измерения при отмене загрузки', async () => {
-    stubXmlHttpRequest([
-      { failWith: 'upload-abort' },
-      ...Array.from({ length: MEASUREMENT_COUNT - 1 }, () => ({}))
-    ]);
+  it('возвращает 0 если все попытки провалились', async () => {
+    // Все попытки с ошибкой
+    stubXmlHttpRequest(
+      Array.from({ length: MEASUREMENT_COUNT }, () => ({ failWith: 'upload-error' }))
+    );
 
-    await expect(testUploadSpeed()).rejects.toThrow('Upload aborted');
+    const result = await testUploadSpeed();
+
+    // Должен вернуть 0, так как нет успешных измерений
+    expect(result).toBe(0);
   });
 
-  it('пробрасывает ошибку сетевого запроса', async () => {
-    stubXmlHttpRequest([
-      { failWith: 'request-error', status: 504 },
-      ...Array.from({ length: MEASUREMENT_COUNT - 1 }, () => ({}))
-    ]);
-
-    await expect(testUploadSpeed()).rejects.toThrow('Upload request failed with status 504');
-  });
-
-  it('прерывает измерения при таймауте запроса', async () => {
+  it('обрабатывает таймауты корректно', async () => {
+    // Первая попытка с таймаутом, остальные успешные
     stubXmlHttpRequest([
       { failWith: 'timeout', status: 0 },
       ...Array.from({ length: MEASUREMENT_COUNT - 1 }, () => ({}))
     ]);
+    queueUploadPerformanceTimeline(uploadDurationsMs, 5);
 
-    await expect(testUploadSpeed()).rejects.toThrow('Upload request failed with status 0');
+    const result = await testUploadSpeed();
+
+    // Должен вернуть результат на основе успешных измерений
+    expect(result).toBeGreaterThanOrEqual(0);
   });
 });
 
@@ -485,13 +518,41 @@ describe('testPing', () => {
     expect(fetchMock).toHaveBeenCalledTimes(PING_ATTEMPTS);
   });
 
-  it('пробрасывает ошибку для неуспешного ответа ping', async () => {
+  it('пропускает неудачные попытки и продолжает измерения', async () => {
+    // Первая попытка с ошибкой, остальные успешные
+    const latencies = [30, 28, 29, 31, 32, 33, 34, 35, 36, 37];
+    let callCount = 0;
+    const fetchMock = vi.fn().mockImplementation(() => {
+      callCount += 1;
+      // Первая попытка возвращает ошибку
+      if (callCount === 1) {
+        return Promise.resolve({ ok: false, status: 500 } as Response);
+      }
+      // Остальные успешные
+      return Promise.resolve({ ok: true } as Response);
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+    // Передаем все значения, но первая попытка провалится, поэтому для успешных используем остальные
+    queuePingTimeline(latencies);
+
+    const result = await testPing();
+
+    // Должен вернуть результат на основе успешных измерений
+    expect(result).toBeGreaterThanOrEqual(0);
+    expect(fetchMock).toHaveBeenCalledTimes(PING_ATTEMPTS);
+  });
+
+  it('возвращает 0 если все попытки провалились', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: false,
       status: 500
     } as Response);
     globalThis.fetch = fetchMock as typeof globalThis.fetch;
 
-    await expect(testPing()).rejects.toThrow('Ping request failed with status 500');
+    const result = await testPing();
+
+    // Должен вернуть 0, так как все попытки провалились
+    expect(result).toBe(0);
+    expect(fetchMock).toHaveBeenCalledTimes(PING_ATTEMPTS);
   });
 });

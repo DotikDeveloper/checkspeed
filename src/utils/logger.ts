@@ -14,7 +14,7 @@ interface LogEntry {
 }
 
 // Версия приложения (можно переопределить через переменную окружения)
-const APP_VERSION = process.env.NEXT_PUBLIC_APP_VERSION || '1.3.0';
+const APP_VERSION = process.env.NEXT_PUBLIC_APP_VERSION || '1.3.1';
 
 class SpeedLogger {
   private enabled: boolean;

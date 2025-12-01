@@ -111,14 +111,33 @@ export const testDownloadSpeed = async (): Promise<number> => {
     logger.debug('download', `Тестирование размера ${sizeMb} МБ`);
     const measurements: number[] = [];
     for (let attempt = 0; attempt < MEASUREMENTS_PER_SIZE; attempt += 1) {
-      const speed = await measureDownloadOnce(sizeMb);
-      measurements.push(speed);
-      logger.debug('download', `Попытка ${attempt + 1}/${MEASUREMENTS_PER_SIZE}: ${speed.toFixed(2)} Мбит/с`);
+      try {
+        const speed = await measureDownloadOnce(sizeMb);
+        measurements.push(speed);
+        logger.debug('download', `Попытка ${attempt + 1}/${MEASUREMENTS_PER_SIZE}: ${speed.toFixed(2)} Мбит/с`);
+      } catch (error) {
+        logger.warn('download', `Попытка ${attempt + 1}/${MEASUREMENTS_PER_SIZE} завершилась ошибкой: ${error instanceof Error ? error.message : String(error)}`);
+        // Пропускаем неудачные попытки, но продолжаем измерения
+        // Если все попытки провалились, это будет обработано ниже
+      }
     }
+    
+    // Если нет успешных измерений для этого размера, пропускаем его
+    if (measurements.length === 0) {
+      logger.warn('download', `Нет успешных измерений для размера ${sizeMb} МБ, пропускаем`);
+      continue;
+    }
+    
     const cleanedMeasurements = removeOutliers(measurements);
     const avgSpeed = averageWithoutColdStart(cleanedMeasurements, COLD_START_SKIP);
     aggregatedSpeeds.push(avgSpeed);
     logger.debug('download', `Средняя скорость для ${sizeMb} МБ: ${avgSpeed.toFixed(2)} Мбит/с`);
+  }
+
+  // Если нет успешных измерений вообще, возвращаем 0
+  if (aggregatedSpeeds.length === 0) {
+    logger.error('download', 'Нет успешных измерений download скорости');
+    return 0;
   }
 
   const cleanedAggregated = removeOutliers(aggregatedSpeeds);
@@ -142,17 +161,6 @@ const measureUploadOnce = (sizeMb: number): Promise<number> =>
     let endTime: number | null = null;
     let progressStartTime: number | null = null;
 
-    const cleanup = () => {
-      xhr.upload.removeEventListener('loadstart', handleLoadStart);
-      xhr.upload.removeEventListener('loadend', handleLoadEnd);
-      xhr.upload.removeEventListener('progress', handleProgress);
-      xhr.upload.removeEventListener('error', handleUploadError);
-      xhr.upload.removeEventListener('abort', handleUploadAbort);
-      xhr.removeEventListener('error', handleRequestError);
-      xhr.removeEventListener('timeout', handleRequestError);
-      xhr.removeEventListener('load', handleLoad);
-    };
-
     const handleLoadStart = () => {
       startTime = performance.now();
       logger.debug('upload', `Upload начат через ${(startTime - requestStart).toFixed(2)} мс после создания запроса`);
@@ -170,25 +178,51 @@ const measureUploadOnce = (sizeMb: number): Promise<number> =>
       logger.debug('upload', `Upload завершён, общее время: ${endTime - (startTime ?? requestStart)} мс`);
     };
 
-    const handleUploadError = () => {
+    // Объявляем обработчики, которые вызывают cleanup
+    let handleUploadError: () => void;
+    let handleUploadAbort: () => void;
+    let handleRequestError: () => void;
+    let handleLoad: () => void;
+    let handleTimeout: () => void;
+
+    // Определяем cleanup перед обработчиками, которые её используют
+    // Используем function declaration для hoisting
+    function cleanup() {
+      xhr.upload.removeEventListener('loadstart', handleLoadStart);
+      xhr.upload.removeEventListener('loadend', handleLoadEnd);
+      xhr.upload.removeEventListener('progress', handleProgress);
+      xhr.upload.removeEventListener('error', handleUploadError);
+      xhr.upload.removeEventListener('abort', handleUploadAbort);
+      xhr.removeEventListener('error', handleRequestError);
+      xhr.removeEventListener('timeout', handleTimeout);
+      xhr.removeEventListener('load', handleLoad);
+    }
+
+    handleUploadError = () => {
       cleanup();
       logger.error('upload', 'Ошибка при передаче данных');
       reject(new Error('Upload failed during transmission'));
     };
 
-    const handleUploadAbort = () => {
+    handleUploadAbort = () => {
       cleanup();
       logger.warn('upload', 'Upload отменён');
       reject(new Error('Upload aborted'));
     };
 
-    const handleRequestError = () => {
+    handleRequestError = () => {
       cleanup();
-      logger.error('upload', `Ошибка запроса: статус ${xhr.status}`);
-      reject(new Error(`Upload request failed with status ${xhr.status}`));
+      // Статус 0 обычно означает таймаут или сетевая ошибка
+      if (xhr.status === 0) {
+        logger.error('upload', 'Запрос завершился с таймаутом или сетевой ошибкой');
+        reject(new Error('Upload request timed out or network error'));
+      } else {
+        logger.error('upload', `Ошибка запроса: статус ${xhr.status}`);
+        reject(new Error(`Upload request failed with status ${xhr.status}`));
+      }
     };
 
-    const handleLoad = () => {
+    handleLoad = () => {
       cleanup();
       if (startTime === null || endTime === null || endTime <= startTime) {
         logger.warn('upload', 'Некорректные временные метки');
@@ -214,9 +248,17 @@ const measureUploadOnce = (sizeMb: number): Promise<number> =>
       resolve(speed);
     };
 
+    handleTimeout = () => {
+      cleanup();
+      logger.error('upload', 'Запрос превысил таймаут (30 секунд)');
+      reject(new Error('Upload request timed out after 30 seconds'));
+    };
+
     xhr.open('POST', UPLOAD_ENDPOINT);
     xhr.responseType = 'json';
-    xhr.timeout = 60000; // 60 секунд таймаут
+    // Уменьшаем таймаут до 30 секунд для serverless функций (Vercel имеет лимиты)
+    // Для файлов до 3 МБ это должно быть достаточно
+    xhr.timeout = 30000; // 30 секунд таймаут
 
     xhr.upload.addEventListener('loadstart', handleLoadStart);
     xhr.upload.addEventListener('loadend', handleLoadEnd);
@@ -224,7 +266,7 @@ const measureUploadOnce = (sizeMb: number): Promise<number> =>
     xhr.upload.addEventListener('error', handleUploadError);
     xhr.upload.addEventListener('abort', handleUploadAbort);
     xhr.addEventListener('error', handleRequestError);
-    xhr.addEventListener('timeout', handleRequestError);
+    xhr.addEventListener('timeout', handleTimeout);
     xhr.addEventListener('load', handleLoad);
 
     const bodyView = payload.slice();
@@ -239,14 +281,33 @@ export const testUploadSpeed = async (): Promise<number> => {
     logger.debug('upload', `Тестирование размера ${sizeMb} МБ`);
     const measurements: number[] = [];
     for (let attempt = 0; attempt < MEASUREMENTS_PER_SIZE; attempt += 1) {
-      const speed = await measureUploadOnce(sizeMb);
-      measurements.push(speed);
-      logger.debug('upload', `Попытка ${attempt + 1}/${MEASUREMENTS_PER_SIZE}: ${speed.toFixed(2)} Мбит/с`);
+      try {
+        const speed = await measureUploadOnce(sizeMb);
+        measurements.push(speed);
+        logger.debug('upload', `Попытка ${attempt + 1}/${MEASUREMENTS_PER_SIZE}: ${speed.toFixed(2)} Мбит/с`);
+      } catch (error) {
+        logger.warn('upload', `Попытка ${attempt + 1}/${MEASUREMENTS_PER_SIZE} завершилась ошибкой: ${error instanceof Error ? error.message : String(error)}`);
+        // Пропускаем неудачные попытки, но продолжаем измерения
+        // Если все попытки провалились, это будет обработано ниже
+      }
     }
+    
+    // Если нет успешных измерений для этого размера, пропускаем его
+    if (measurements.length === 0) {
+      logger.warn('upload', `Нет успешных измерений для размера ${sizeMb} МБ, пропускаем`);
+      continue;
+    }
+    
     const cleanedMeasurements = removeOutliers(measurements);
     const avgSpeed = averageWithoutColdStart(cleanedMeasurements, COLD_START_SKIP);
     aggregatedSpeeds.push(avgSpeed);
     logger.debug('upload', `Средняя скорость для ${sizeMb} МБ: ${avgSpeed.toFixed(2)} Мбит/с`);
+  }
+
+  // Если нет успешных измерений вообще, возвращаем 0
+  if (aggregatedSpeeds.length === 0) {
+    logger.error('upload', 'Нет успешных измерений upload скорости');
+    return 0;
   }
 
   const cleanedAggregated = removeOutliers(aggregatedSpeeds);
@@ -286,9 +347,21 @@ export async function testPing(): Promise<number> {
   const rawMeasurements: number[] = [];
 
   for (let attempt = 0; attempt < PING_ATTEMPTS; attempt += 1) {
-    const latency = await measurePingOnce();
-    rawMeasurements.push(latency);
-    logger.debug('ping', `Попытка ${attempt + 1}/${PING_ATTEMPTS}: ${latency.toFixed(2)} мс`);
+    try {
+      const latency = await measurePingOnce();
+      rawMeasurements.push(latency);
+      logger.debug('ping', `Попытка ${attempt + 1}/${PING_ATTEMPTS}: ${latency.toFixed(2)} мс`);
+    } catch (error) {
+      logger.warn('ping', `Попытка ${attempt + 1}/${PING_ATTEMPTS} завершилась ошибкой: ${error instanceof Error ? error.message : String(error)}`);
+      // Пропускаем неудачные попытки, но продолжаем измерения
+      // Если все попытки провалились, это будет обработано ниже
+    }
+  }
+
+  // Если нет успешных измерений, возвращаем 0
+  if (rawMeasurements.length === 0) {
+    logger.error('ping', 'Нет успешных измерений ping');
+    return 0;
   }
 
   logger.debug('ping', `Сырые измерения: ${rawMeasurements.map(v => v.toFixed(2)).join(', ')} мс`);
@@ -299,6 +372,13 @@ export async function testPing(): Promise<number> {
   logger.debug('ping', `После обрезки: ${trimmedMeasurements.map(v => v.toFixed(2)).join(', ')} мс`);
 
   const cleanedMeasurements = removeOutliers(trimmedMeasurements);
+  
+  // Если после удаления выбросов не осталось измерений, возвращаем 0
+  if (cleanedMeasurements.length === 0) {
+    logger.error('ping', 'Нет валидных измерений ping после обработки');
+    return 0;
+  }
+  
   logger.debug('ping', `После удаления выбросов: ${cleanedMeasurements.map(v => v.toFixed(2)).join(', ')} мс`);
 
   const representativeLatency = median(cleanedMeasurements);

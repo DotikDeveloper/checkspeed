@@ -170,6 +170,12 @@ export const testDownloadSpeed = async (): Promise<number> => {
     return 0;
   }
 
+  // Если нет успешных измерений вообще, возвращаем 0
+  if (aggregatedSpeeds.length === 0) {
+    logger.error('download', 'Нет успешных измерений download скорости');
+    return 0;
+  }
+
   const cleanedAggregated = removeOutliers(aggregatedSpeeds);
   const overallAverage = average(cleanedAggregated);
   const rounded = Math.round(overallAverage);
@@ -359,6 +365,12 @@ export const testUploadSpeed = async (): Promise<number> => {
   // Запускаем измерения для всех размеров файлов параллельно
   const sizePromises = FILE_SIZES_MB.map(sizeMb => measureUploadForSize(sizeMb));
   const aggregatedSpeeds = (await Promise.all(sizePromises)).filter(speed => speed > 0);
+
+  // Если нет успешных измерений вообще, возвращаем 0
+  if (aggregatedSpeeds.length === 0) {
+    logger.error('upload', 'Нет успешных измерений upload скорости');
+    return 0;
+  }
 
   // Если нет успешных измерений вообще, возвращаем 0
   if (aggregatedSpeeds.length === 0) {

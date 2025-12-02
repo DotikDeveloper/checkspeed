@@ -189,23 +189,39 @@ export default function Home() {
           // Запускаем все три теста параллельно для каждого измерения
           const results = await testAllSpeeds();
           
-          // Проверяем, что результаты валидны (не все нули из-за rate limiting)
-          if (results.download > 0 || results.upload > 0 || results.ping > 0) {
+          // Добавляем только валидные (не нулевые) значения в соответствующие серии
+          // Это предотвращает занижение средних значений из-за rate limiting
+          let hasValidResults = false;
+          
+          if (results.download > 0) {
             downloadSeries.push(results.download);
-            uploadSeries.push(results.upload);
-            pingSeries.push(results.ping);
-            
-            // Обновляем UI после каждого измерения
+            hasValidResults = true;
             startTransition(() => {
               setDownloadSamples((prev) => [...prev, results.download]);
-              setUploadSamples((prev) => [...prev, results.upload]);
-              // Обновляем ping только последним значением (обычно ping не меняется сильно)
-              if (i === SAMPLE_COUNT - 1) {
-                setPing(results.ping);
-              }
             });
-          } else {
-            // Если все результаты нулевые (возможно, rate limit), добавляем небольшую задержку
+          }
+          
+          if (results.upload > 0) {
+            uploadSeries.push(results.upload);
+            hasValidResults = true;
+            startTransition(() => {
+              setUploadSamples((prev) => [...prev, results.upload]);
+            });
+          }
+          
+          if (results.ping > 0) {
+            pingSeries.push(results.ping);
+            hasValidResults = true;
+            // Обновляем ping только последним значением (обычно ping не меняется сильно)
+            if (i === SAMPLE_COUNT - 1) {
+              startTransition(() => {
+                setPing(results.ping);
+              });
+            }
+          }
+          
+          // Если все результаты нулевые (возможно, rate limit), добавляем небольшую задержку
+          if (!hasValidResults) {
             logger.warn('speedtest', `Измерение ${i + 1} вернуло нулевые результаты, возможно rate limit`);
             // Небольшая задержка перед следующим измерением
             await new Promise(resolve => setTimeout(resolve, 1000));

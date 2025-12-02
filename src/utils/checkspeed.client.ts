@@ -10,7 +10,9 @@ export { average, averageWithoutColdStart, median, removeOutliers };
 // Стало: [2, 5] × 2 измерения = 4 запроса на download/upload
 const FILE_SIZES_MB = [2, 5] as const;
 const MEASUREMENTS_PER_SIZE = 2;
-const COLD_START_SKIP = 1;
+// Уменьшено с 1 до 0, так как при 2 измерениях пропуск первого оставляет только 1 значение
+// Это обеспечивает использование обоих измерений для более точного результата
+const COLD_START_SKIP = 0;
 
 export const DOWNLOAD_ENDPOINT = '/api/download';
 export const UPLOAD_ENDPOINT = '/api/upload';

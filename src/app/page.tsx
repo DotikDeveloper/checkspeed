@@ -8,6 +8,7 @@ import {
   type SpeedTestResults,
 } from "@/utils/checkspeed.client";
 import { logger } from "@/utils/logger";
+import { median } from "@/utils/stats";
 import {
   startTransition,
   useCallback,
@@ -244,10 +245,10 @@ export default function Home() {
           Math.max(uploadSeries.length, 1),
       );
       // Для ping используем медиану из всех измерений
-      const sortedPings = [...pingSeries].sort((a, b) => a - b);
-      const pingMedian = sortedPings.length > 0 
-        ? sortedPings[Math.floor(sortedPings.length / 2)]
-        : pingSeries[pingSeries.length - 1] || 0;
+      // Используем функцию median, которая правильно обрабатывает четные массивы
+      const pingMedian = pingSeries.length > 0 
+        ? median(pingSeries)
+        : 0;
 
       startTransition(() => {
         setDownloadAverage(downloadAvg);

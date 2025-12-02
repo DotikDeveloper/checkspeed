@@ -5,6 +5,7 @@ import {
   testPing,
   testUploadSpeed,
 } from "@/utils/checkspeed.client";
+import { logger } from "@/utils/logger";
 import {
   startTransition,
   useCallback,
@@ -13,7 +14,7 @@ import {
   useState,
 } from "react";
 
-const SAMPLE_COUNT = 20;
+const SAMPLE_COUNT = 10;
 
 type SpeedChartProps = {
   title: string;
@@ -178,22 +179,65 @@ export default function Home() {
     const uploadSeries: number[] = [];
 
     try {
-      for (let i = 0; i < SAMPLE_COUNT; i += 1) {
-        const downloadValue = await testDownloadSpeed();
-        downloadSeries.push(downloadValue);
-        startTransition(() => {
-          setDownloadSamples((prev) => [...prev, downloadValue]);
-        });
+      // Измеряем ping один раз в начале, так как он обычно стабилен
+      // Это предотвращает избыточные измерения (80 вместо 8)
+      let pingValue = 0;
+      try {
+        pingValue = await testPing();
+        if (pingValue > 0) {
+          startTransition(() => {
+            setPing(pingValue);
+          });
+        }
+      } catch (error) {
+        logger.warn('speedtest', `Ошибка при измерении ping: ${error instanceof Error ? error.message : String(error)}`);
       }
 
+      // Выполняем серию измерений download и upload
+      // Download и upload выполняются параллельно для каждого измерения
       for (let i = 0; i < SAMPLE_COUNT; i += 1) {
-        const uploadValue = await testUploadSpeed();
-        uploadSeries.push(uploadValue);
-        startTransition(() => {
-          setUploadSamples((prev) => [...prev, uploadValue]);
-        });
+        try {
+          // Запускаем download и upload параллельно (без ping, так как он уже измерен)
+          const [download, upload] = await Promise.all([
+            testDownloadSpeed(),
+            testUploadSpeed()
+          ]);
+          
+          // Добавляем только валидные (не нулевые) значения в соответствующие серии
+          // Это предотвращает занижение средних значений из-за rate limiting
+          let hasValidResults = false;
+          
+          if (download > 0) {
+            downloadSeries.push(download);
+            hasValidResults = true;
+            startTransition(() => {
+              setDownloadSamples((prev) => [...prev, download]);
+            });
+          }
+          
+          if (upload > 0) {
+            uploadSeries.push(upload);
+            hasValidResults = true;
+            startTransition(() => {
+              setUploadSamples((prev) => [...prev, upload]);
+            });
+          }
+          
+          // Если все результаты нулевые (возможно, rate limit), добавляем небольшую задержку
+          if (!hasValidResults) {
+            logger.warn('speedtest', `Измерение ${i + 1} вернуло нулевые результаты, возможно rate limit`);
+            // Небольшая задержка перед следующим измерением
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+        } catch (error) {
+          // Обрабатываем ошибки отдельных измерений, но продолжаем цикл
+          logger.warn('speedtest', `Ошибка при измерении ${i + 1}: ${error instanceof Error ? error.message : String(error)}`);
+          // Добавляем задержку перед следующим измерением
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
       }
 
+      // Вычисляем средние значения
       const downloadAvg = Math.round(
         downloadSeries.reduce((acc, value) => acc + value, 0) /
           Math.max(downloadSeries.length, 1),
@@ -202,12 +246,16 @@ export default function Home() {
         uploadSeries.reduce((acc, value) => acc + value, 0) /
           Math.max(uploadSeries.length, 1),
       );
-      const pingValue = await testPing();
+      // Ping уже измерен один раз в начале, используем это значение
+      // Если ping не был измерен (ошибка), оставляем текущее значение или 0
 
       startTransition(() => {
         setDownloadAverage(downloadAvg);
         setUploadAverage(uploadAvg);
-        setPing(pingValue);
+        // Ping уже установлен при измерении, обновляем только если есть новое значение
+        if (pingValue > 0) {
+          setPing(pingValue);
+        }
       });
     } finally {
       startTransition(() => {
@@ -311,6 +359,11 @@ export default function Home() {
           </button>
           <p className="text-sm text-gray-400 text-center">
             Каждое измерение выполняется {SAMPLE_COUNT} раз. Средняя скорость вычисляется по результатам серии тестов.
+            {downloadSamples.length < SAMPLE_COUNT && downloadSamples.length > 0 && (
+              <span className="block mt-1 text-yellow-400">
+                Выполнено {downloadSamples.length} из {SAMPLE_COUNT} измерений
+              </span>
+            )}
           </p>
         </div>
       </main>

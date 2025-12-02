@@ -1,14 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { bytesToMbps, createUploadPayload, testDownloadSpeed, testPing, testUploadSpeed } from './checkspeed.client';
+import { bytesToMbps, createUploadPayload, testAllSpeeds, testDownloadSpeed, testPing, testUploadSpeed } from './checkspeed.client';
 import { average, averageWithoutColdStart, median, removeOutliers } from './stats';
 import { logger } from './logger';
 
 const DOWNLOAD_BYTES_TOTAL = 1024 * 1024;
 const DOWNLOAD_CHUNK_BYTES = DOWNLOAD_BYTES_TOTAL / 2;
-const FILE_SIZES_MB = [0.5, 1, 2, 3] as const;
-const MEASUREMENTS_PER_SIZE = 3;
-const PING_ATTEMPTS = 10;
+// Обновлено в соответствии с новыми настройками в checkspeed.client.ts
+const FILE_SIZES_MB = [2, 5] as const;
+const MEASUREMENTS_PER_SIZE = 2;
+const PING_ATTEMPTS = 8;
 const globalWithXhr = globalThis as typeof globalThis & { XMLHttpRequest?: typeof XMLHttpRequest };
 const originalFetch = globalThis.fetch;
 const originalXMLHttpRequest = globalWithXhr.XMLHttpRequest;
@@ -32,11 +33,10 @@ afterEach(() => {
   }
 });
 
+// Обновлено для 2 размеров файлов × 2 измерения
 const SPEED_MATRIX: number[][] = [
-  [10, 50, 60],
-  [15, 70, 75],
-  [20, 80, 90],
-  [25, 100, 110]
+  [50, 60], // для размера 2 МБ
+  [80, 90]  // для размера 5 МБ
 ];
 
 // TTFB (Time To First Byte) в миллисекундах для симуляции
@@ -554,5 +554,90 @@ describe('testPing', () => {
     // Должен вернуть 0, так как все попытки провалились
     expect(result).toBe(0);
     expect(fetchMock).toHaveBeenCalledTimes(PING_ATTEMPTS);
+  });
+});
+
+describe('testAllSpeeds', () => {
+  it('должен выполнить все три теста параллельно и вернуть результаты', async () => {
+    // Мокаем fetch для download и ping
+    const downloadBytes = FILE_SIZES_MB.reduce((acc, size) => acc + size * 1024 * 1024, 0);
+    const downloadChunks = Math.ceil(downloadBytes / DOWNLOAD_CHUNK_BYTES);
+    
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/api/download')) {
+        const mockResponse = new Response(
+          new ReadableStream({
+            start(controller) {
+              for (let i = 0; i < downloadChunks; i++) {
+                controller.enqueue(new Uint8Array(DOWNLOAD_CHUNK_BYTES));
+              }
+              controller.close();
+            }
+          }),
+          { status: 200 }
+        );
+        return Promise.resolve(mockResponse);
+      }
+      if (url.includes('/api/ping')) {
+        return Promise.resolve(new Response(null, { status: 200 }));
+      }
+      return Promise.reject(new Error('Unknown URL'));
+    });
+    globalThis.fetch = fetchMock as typeof globalThis.fetch;
+
+    // Мокаем XMLHttpRequest для upload
+    let uploadCallCount = 0;
+    const xhrMock = vi.fn().mockImplementation(() => {
+      const xhr = {
+        open: vi.fn(),
+        send: vi.fn(),
+        setRequestHeader: vi.fn(),
+        responseType: '',
+        timeout: 0,
+        status: 200,
+        getResponseHeader: vi.fn(),
+        upload: {
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn()
+        },
+        addEventListener: vi.fn((event: string, handler: () => void) => {
+          if (event === 'load') {
+            // Используем setTimeout с минимальной задержкой для симуляции асинхронности
+            setTimeout(() => {
+              handler();
+            }, 10);
+            uploadCallCount++;
+          }
+        }),
+        removeEventListener: vi.fn()
+      };
+      return xhr;
+    });
+    globalWithXhr.XMLHttpRequest = xhrMock as unknown as typeof XMLHttpRequest;
+
+    // Используем простой мок performance.now, который возвращает увеличивающееся значение
+    let performanceTime = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => {
+      performanceTime += 10; // Увеличиваем время на 10мс при каждом вызове
+      return performanceTime;
+    });
+
+    const results = await testAllSpeeds();
+
+    // Проверяем, что все три теста были выполнены
+    expect(results).toHaveProperty('download');
+    expect(results).toHaveProperty('upload');
+    expect(results).toHaveProperty('ping');
+    
+    // Проверяем, что результаты являются числами
+    expect(typeof results.download).toBe('number');
+    expect(typeof results.upload).toBe('number');
+    expect(typeof results.ping).toBe('number');
+    
+    // Проверяем, что fetch был вызван для download и ping
+    expect(fetchMock).toHaveBeenCalled();
+    
+    // Проверяем, что XMLHttpRequest был использован для upload
+    expect(xhrMock).toHaveBeenCalled();
   });
 });

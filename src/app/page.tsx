@@ -1,10 +1,13 @@
 "use client";
 
 import {
+  testAllSpeeds,
   testDownloadSpeed,
   testPing,
   testUploadSpeed,
+  type SpeedTestResults,
 } from "@/utils/checkspeed.client";
+import { logger } from "@/utils/logger";
 import {
   startTransition,
   useCallback,
@@ -13,7 +16,7 @@ import {
   useState,
 } from "react";
 
-const SAMPLE_COUNT = 20;
+const SAMPLE_COUNT = 10;
 
 type SpeedChartProps = {
   title: string;
@@ -176,24 +179,46 @@ export default function Home() {
 
     const downloadSeries: number[] = [];
     const uploadSeries: number[] = [];
+    const pingSeries: number[] = [];
 
     try {
+      // Выполняем серию измерений
+      // Каждое измерение выполняется параллельно (download, upload, ping одновременно)
       for (let i = 0; i < SAMPLE_COUNT; i += 1) {
-        const downloadValue = await testDownloadSpeed();
-        downloadSeries.push(downloadValue);
-        startTransition(() => {
-          setDownloadSamples((prev) => [...prev, downloadValue]);
-        });
+        try {
+          // Запускаем все три теста параллельно для каждого измерения
+          const results = await testAllSpeeds();
+          
+          // Проверяем, что результаты валидны (не все нули из-за rate limiting)
+          if (results.download > 0 || results.upload > 0 || results.ping > 0) {
+            downloadSeries.push(results.download);
+            uploadSeries.push(results.upload);
+            pingSeries.push(results.ping);
+            
+            // Обновляем UI после каждого измерения
+            startTransition(() => {
+              setDownloadSamples((prev) => [...prev, results.download]);
+              setUploadSamples((prev) => [...prev, results.upload]);
+              // Обновляем ping только последним значением (обычно ping не меняется сильно)
+              if (i === SAMPLE_COUNT - 1) {
+                setPing(results.ping);
+              }
+            });
+          } else {
+            // Если все результаты нулевые (возможно, rate limit), добавляем небольшую задержку
+            logger.warn('speedtest', `Измерение ${i + 1} вернуло нулевые результаты, возможно rate limit`);
+            // Небольшая задержка перед следующим измерением
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+        } catch (error) {
+          // Обрабатываем ошибки отдельных измерений, но продолжаем цикл
+          logger.warn('speedtest', `Ошибка при измерении ${i + 1}: ${error instanceof Error ? error.message : String(error)}`);
+          // Добавляем задержку перед следующим измерением
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
       }
 
-      for (let i = 0; i < SAMPLE_COUNT; i += 1) {
-        const uploadValue = await testUploadSpeed();
-        uploadSeries.push(uploadValue);
-        startTransition(() => {
-          setUploadSamples((prev) => [...prev, uploadValue]);
-        });
-      }
-
+      // Вычисляем средние значения
       const downloadAvg = Math.round(
         downloadSeries.reduce((acc, value) => acc + value, 0) /
           Math.max(downloadSeries.length, 1),
@@ -202,12 +227,16 @@ export default function Home() {
         uploadSeries.reduce((acc, value) => acc + value, 0) /
           Math.max(uploadSeries.length, 1),
       );
-      const pingValue = await testPing();
+      // Для ping используем медиану из всех измерений
+      const sortedPings = [...pingSeries].sort((a, b) => a - b);
+      const pingMedian = sortedPings.length > 0 
+        ? sortedPings[Math.floor(sortedPings.length / 2)]
+        : pingSeries[pingSeries.length - 1] || 0;
 
       startTransition(() => {
         setDownloadAverage(downloadAvg);
         setUploadAverage(uploadAvg);
-        setPing(pingValue);
+        setPing(pingMedian);
       });
     } finally {
       startTransition(() => {
@@ -311,6 +340,11 @@ export default function Home() {
           </button>
           <p className="text-sm text-gray-400 text-center">
             Каждое измерение выполняется {SAMPLE_COUNT} раз. Средняя скорость вычисляется по результатам серии тестов.
+            {downloadSamples.length < SAMPLE_COUNT && downloadSamples.length > 0 && (
+              <span className="block mt-1 text-yellow-400">
+                Выполнено {downloadSamples.length} из {SAMPLE_COUNT} измерений
+              </span>
+            )}
           </p>
         </div>
       </main>

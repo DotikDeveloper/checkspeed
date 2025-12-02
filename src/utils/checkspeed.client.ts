@@ -5,15 +5,19 @@ import { logger } from './logger';
 
 export { average, averageWithoutColdStart, median, removeOutliers };
 
-const FILE_SIZES_MB = [0.5, 1, 2, 3] as const;
-const MEASUREMENTS_PER_SIZE = 3;
+// Оптимизированные настройки: меньше запросов, больше размеры файлов
+// Было: [0.5, 1, 2, 3] × 3 измерения = 12 запросов на download/upload
+// Стало: [2, 5] × 2 измерения = 4 запроса на download/upload
+const FILE_SIZES_MB = [2, 5] as const;
+const MEASUREMENTS_PER_SIZE = 2;
 const COLD_START_SKIP = 1;
 
 export const DOWNLOAD_ENDPOINT = '/api/download';
 export const UPLOAD_ENDPOINT = '/api/upload';
 export const PING_ENDPOINT = '/api/ping';
 
-const PING_ATTEMPTS = 10;
+// Уменьшено с 10 до 8 для оптимизации
+const PING_ATTEMPTS = 8;
 const PING_PRECISION = 1;
 
 export const bytesToMbps = (bytesTransferred: number, durationSeconds: number): number => {
@@ -40,6 +44,12 @@ const measureDownloadOnce = async (sizeMb: number): Promise<number> => {
   const ttfb = performance.now() - requestStart; // Time To First Byte
 
   if (!response.ok) {
+    // 429 (Too Many Requests) - это ожидаемое поведение rate limiting, не ошибка
+    if (response.status === 429) {
+      const retryAfter = response.headers.get('Retry-After') || 'неизвестно';
+      logger.warn('download', `Rate limit превышен (429). Retry-After: ${retryAfter} сек`);
+      return 0;
+    }
     logger.error('download', `Запрос завершился с ошибкой: ${response.status}`);
     throw new Error(`Download request failed with status ${response.status}`);
   }
@@ -103,36 +113,48 @@ const measureDownloadOnce = async (sizeMb: number): Promise<number> => {
   return speed;
 };
 
+/**
+ * Выполняет измерения для одного размера файла параллельно
+ */
+const measureDownloadForSize = async (sizeMb: number): Promise<number> => {
+  logger.debug('download', `Тестирование размера ${sizeMb} МБ`);
+  const measurements: number[] = [];
+  
+  // Запускаем все измерения для этого размера параллельно
+  const measurementPromises = Array.from({ length: MEASUREMENTS_PER_SIZE }, (_, attempt) =>
+    measureDownloadOnce(sizeMb)
+      .then((speed) => {
+        logger.debug('download', `Попытка ${attempt + 1}/${MEASUREMENTS_PER_SIZE}: ${speed.toFixed(2)} Мбит/с`);
+        return speed;
+      })
+      .catch((error) => {
+        logger.warn('download', `Попытка ${attempt + 1}/${MEASUREMENTS_PER_SIZE} завершилась ошибкой: ${error instanceof Error ? error.message : String(error)}`);
+        return 0; // Возвращаем 0 для неудачных попыток
+      })
+  );
+  
+  const results = await Promise.all(measurementPromises);
+  measurements.push(...results.filter(speed => speed > 0));
+  
+  // Если нет успешных измерений для этого размера, возвращаем 0
+  if (measurements.length === 0) {
+    logger.warn('download', `Нет успешных измерений для размера ${sizeMb} МБ, пропускаем`);
+    return 0;
+  }
+  
+  const cleanedMeasurements = removeOutliers(measurements);
+  const avgSpeed = averageWithoutColdStart(cleanedMeasurements, COLD_START_SKIP);
+  logger.debug('download', `Средняя скорость для ${sizeMb} МБ: ${avgSpeed.toFixed(2)} Мбит/с`);
+  
+  return avgSpeed;
+};
+
 export const testDownloadSpeed = async (): Promise<number> => {
   logger.info('download', 'Начало тестирования download скорости');
-  const aggregatedSpeeds: number[] = [];
-
-  for (const sizeMb of FILE_SIZES_MB) {
-    logger.debug('download', `Тестирование размера ${sizeMb} МБ`);
-    const measurements: number[] = [];
-    for (let attempt = 0; attempt < MEASUREMENTS_PER_SIZE; attempt += 1) {
-      try {
-        const speed = await measureDownloadOnce(sizeMb);
-        measurements.push(speed);
-        logger.debug('download', `Попытка ${attempt + 1}/${MEASUREMENTS_PER_SIZE}: ${speed.toFixed(2)} Мбит/с`);
-      } catch (error) {
-        logger.warn('download', `Попытка ${attempt + 1}/${MEASUREMENTS_PER_SIZE} завершилась ошибкой: ${error instanceof Error ? error.message : String(error)}`);
-        // Пропускаем неудачные попытки, но продолжаем измерения
-        // Если все попытки провалились, это будет обработано ниже
-      }
-    }
-    
-    // Если нет успешных измерений для этого размера, пропускаем его
-    if (measurements.length === 0) {
-      logger.warn('download', `Нет успешных измерений для размера ${sizeMb} МБ, пропускаем`);
-      continue;
-    }
-    
-    const cleanedMeasurements = removeOutliers(measurements);
-    const avgSpeed = averageWithoutColdStart(cleanedMeasurements, COLD_START_SKIP);
-    aggregatedSpeeds.push(avgSpeed);
-    logger.debug('download', `Средняя скорость для ${sizeMb} МБ: ${avgSpeed.toFixed(2)} Мбит/с`);
-  }
+  
+  // Запускаем измерения для всех размеров файлов параллельно
+  const sizePromises = FILE_SIZES_MB.map(sizeMb => measureDownloadForSize(sizeMb));
+  const aggregatedSpeeds = (await Promise.all(sizePromises)).filter(speed => speed > 0);
 
   // Если нет успешных измерений вообще, возвращаем 0
   if (aggregatedSpeeds.length === 0) {
@@ -212,6 +234,13 @@ const measureUploadOnce = (sizeMb: number): Promise<number> =>
 
     handleRequestError = () => {
       cleanup();
+      // 429 (Too Many Requests) - это ожидаемое поведение rate limiting, не ошибка
+      if (xhr.status === 429) {
+        const retryAfter = xhr.getResponseHeader('Retry-After') || 'неизвестно';
+        logger.warn('upload', `Rate limit превышен (429). Retry-After: ${retryAfter} сек`);
+        resolve(0);
+        return;
+      }
       // Статус 0 обычно означает таймаут или сетевая ошибка
       if (xhr.status === 0) {
         logger.error('upload', 'Запрос завершился с таймаутом или сетевой ошибкой');
@@ -224,6 +253,13 @@ const measureUploadOnce = (sizeMb: number): Promise<number> =>
 
     handleLoad = () => {
       cleanup();
+      // Проверяем статус ответа - 429 может прийти через событие load
+      if (xhr.status === 429) {
+        const retryAfter = xhr.getResponseHeader('Retry-After') || 'неизвестно';
+        logger.warn('upload', `Rate limit превышен (429). Retry-After: ${retryAfter} сек`);
+        resolve(0);
+        return;
+      }
       if (startTime === null || endTime === null || endTime <= startTime) {
         logger.warn('upload', 'Некорректные временные метки');
         resolve(0);
@@ -273,36 +309,48 @@ const measureUploadOnce = (sizeMb: number): Promise<number> =>
     xhr.send(bodyView.buffer);
   });
 
+/**
+ * Выполняет измерения для одного размера файла параллельно
+ */
+const measureUploadForSize = async (sizeMb: number): Promise<number> => {
+  logger.debug('upload', `Тестирование размера ${sizeMb} МБ`);
+  const measurements: number[] = [];
+  
+  // Запускаем все измерения для этого размера параллельно
+  const measurementPromises = Array.from({ length: MEASUREMENTS_PER_SIZE }, (_, attempt) =>
+    measureUploadOnce(sizeMb)
+      .then((speed) => {
+        logger.debug('upload', `Попытка ${attempt + 1}/${MEASUREMENTS_PER_SIZE}: ${speed.toFixed(2)} Мбит/с`);
+        return speed;
+      })
+      .catch((error) => {
+        logger.warn('upload', `Попытка ${attempt + 1}/${MEASUREMENTS_PER_SIZE} завершилась ошибкой: ${error instanceof Error ? error.message : String(error)}`);
+        return 0; // Возвращаем 0 для неудачных попыток
+      })
+  );
+  
+  const results = await Promise.all(measurementPromises);
+  measurements.push(...results.filter(speed => speed > 0));
+  
+  // Если нет успешных измерений для этого размера, возвращаем 0
+  if (measurements.length === 0) {
+    logger.warn('upload', `Нет успешных измерений для размера ${sizeMb} МБ, пропускаем`);
+    return 0;
+  }
+  
+  const cleanedMeasurements = removeOutliers(measurements);
+  const avgSpeed = averageWithoutColdStart(cleanedMeasurements, COLD_START_SKIP);
+  logger.debug('upload', `Средняя скорость для ${sizeMb} МБ: ${avgSpeed.toFixed(2)} Мбит/с`);
+  
+  return avgSpeed;
+};
+
 export const testUploadSpeed = async (): Promise<number> => {
   logger.info('upload', 'Начало тестирования upload скорости');
-  const aggregatedSpeeds: number[] = [];
-
-  for (const sizeMb of FILE_SIZES_MB) {
-    logger.debug('upload', `Тестирование размера ${sizeMb} МБ`);
-    const measurements: number[] = [];
-    for (let attempt = 0; attempt < MEASUREMENTS_PER_SIZE; attempt += 1) {
-      try {
-        const speed = await measureUploadOnce(sizeMb);
-        measurements.push(speed);
-        logger.debug('upload', `Попытка ${attempt + 1}/${MEASUREMENTS_PER_SIZE}: ${speed.toFixed(2)} Мбит/с`);
-      } catch (error) {
-        logger.warn('upload', `Попытка ${attempt + 1}/${MEASUREMENTS_PER_SIZE} завершилась ошибкой: ${error instanceof Error ? error.message : String(error)}`);
-        // Пропускаем неудачные попытки, но продолжаем измерения
-        // Если все попытки провалились, это будет обработано ниже
-      }
-    }
-    
-    // Если нет успешных измерений для этого размера, пропускаем его
-    if (measurements.length === 0) {
-      logger.warn('upload', `Нет успешных измерений для размера ${sizeMb} МБ, пропускаем`);
-      continue;
-    }
-    
-    const cleanedMeasurements = removeOutliers(measurements);
-    const avgSpeed = averageWithoutColdStart(cleanedMeasurements, COLD_START_SKIP);
-    aggregatedSpeeds.push(avgSpeed);
-    logger.debug('upload', `Средняя скорость для ${sizeMb} МБ: ${avgSpeed.toFixed(2)} Мбит/с`);
-  }
+  
+  // Запускаем измерения для всех размеров файлов параллельно
+  const sizePromises = FILE_SIZES_MB.map(sizeMb => measureUploadForSize(sizeMb));
+  const aggregatedSpeeds = (await Promise.all(sizePromises)).filter(speed => speed > 0);
 
   // Если нет успешных измерений вообще, возвращаем 0
   if (aggregatedSpeeds.length === 0) {
@@ -327,6 +375,12 @@ const measurePingOnce = async (): Promise<number> => {
   });
 
   if (!response.ok) {
+    // 429 (Too Many Requests) - это ожидаемое поведение rate limiting, не ошибка
+    if (response.status === 429) {
+      const retryAfter = response.headers.get('Retry-After') || 'неизвестно';
+      logger.warn('ping', `Rate limit превышен (429). Retry-After: ${retryAfter} сек`);
+      return 0;
+    }
     logger.error('ping', `Запрос завершился с ошибкой: ${response.status}`);
     throw new Error(`Ping request failed with status ${response.status}`);
   }
@@ -387,4 +441,115 @@ export async function testPing(): Promise<number> {
   logger.info('ping', `Итоговый пинг: ${rounded} мс (медиана: ${representativeLatency.toFixed(2)})`);
 
   return rounded;
+}
+
+/**
+ * Интерфейс для результатов всех измерений
+ */
+export interface SpeedTestResults {
+  download: number;
+  upload: number;
+  ping: number;
+}
+
+/**
+ * Выполняет все измерения скорости параллельно
+ * Download, Upload и Ping выполняются одновременно для сокращения общего времени измерения
+ * 
+ * @returns Promise с результатами всех измерений
+ */
+export async function testAllSpeeds(): Promise<SpeedTestResults> {
+  logger.info('speedtest', 'Начало параллельного тестирования всех параметров скорости');
+  const startTime = performance.now();
+
+  // Запускаем все три теста параллельно
+  const [download, upload, ping] = await Promise.all([
+    testDownloadSpeed(),
+    testUploadSpeed(),
+    testPing()
+  ]);
+
+  const totalTime = performance.now() - startTime;
+  logger.info('speedtest', `Все измерения завершены за ${(totalTime / 1000).toFixed(2)} секунд`, {
+    download: `${download} Мбит/с`,
+    upload: `${upload} Мбит/с`,
+    ping: `${ping} мс`
+  });
+
+  return { download, upload, ping };
+}
+
+/**
+ * Интерфейс для информации о сервере
+ */
+export interface ServerInfo {
+  id: string;
+  name: string;
+  url: string;
+  location?: string;
+}
+
+/**
+ * Определяет ближайший сервер на основе ping
+ * В текущей реализации возвращает локальный сервер
+ * Подготовка к будущему расширению с несколькими серверами
+ * 
+ * @param servers - Список доступных серверов
+ * @returns Promise с информацией о ближайшем сервере
+ */
+export async function findNearestServer(servers: ServerInfo[] = []): Promise<ServerInfo> {
+  // Если серверы не предоставлены, используем локальный сервер по умолчанию
+  if (servers.length === 0) {
+    return {
+      id: 'local',
+      name: 'Локальный сервер',
+      url: '',
+      location: 'Локально'
+    };
+  }
+
+  // Если только один сервер, возвращаем его
+  if (servers.length === 1) {
+    return servers[0];
+  }
+
+  logger.info('server', `Проверка ${servers.length} серверов для определения ближайшего`);
+
+  // Измеряем ping для всех серверов параллельно
+  const pingPromises = servers.map(async (server) => {
+    try {
+      const startTime = performance.now();
+      const response = await fetch(`${server.url}${PING_ENDPOINT}`, {
+        method: 'HEAD',
+        cache: 'no-store',
+        signal: AbortSignal.timeout(5000) // Таймаут 5 секунд для каждого сервера
+      });
+      const endTime = performance.now();
+      
+      if (response.ok) {
+        const latency = endTime - startTime;
+        logger.debug('server', `Сервер ${server.name}: ${latency.toFixed(2)} мс`);
+        return { server, latency };
+      }
+      return { server, latency: Infinity };
+    } catch (error) {
+      logger.warn('server', `Ошибка при проверке сервера ${server.name}: ${error instanceof Error ? error.message : String(error)}`);
+      return { server, latency: Infinity };
+    }
+  });
+
+  const results = await Promise.all(pingPromises);
+  
+  // Находим сервер с минимальным ping
+  const nearest = results.reduce((best, current) => 
+    current.latency < best.latency ? current : best
+  );
+
+  if (nearest.latency === Infinity) {
+    logger.warn('server', 'Не удалось определить ближайший сервер, используем первый доступный');
+    return servers[0];
+  }
+
+  logger.info('server', `Выбран ближайший сервер: ${nearest.server.name} (${nearest.latency.toFixed(2)} мс)`);
+  return nearest.server;
 }

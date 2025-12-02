@@ -1,14 +1,11 @@
 "use client";
 
 import {
-  testAllSpeeds,
   testDownloadSpeed,
   testPing,
   testUploadSpeed,
-  type SpeedTestResults,
 } from "@/utils/checkspeed.client";
 import { logger } from "@/utils/logger";
-import { median } from "@/utils/stats";
 import {
   startTransition,
   useCallback,
@@ -180,45 +177,50 @@ export default function Home() {
 
     const downloadSeries: number[] = [];
     const uploadSeries: number[] = [];
-    const pingSeries: number[] = [];
 
     try {
-      // Выполняем серию измерений
-      // Каждое измерение выполняется параллельно (download, upload, ping одновременно)
+      // Измеряем ping один раз в начале, так как он обычно стабилен
+      // Это предотвращает избыточные измерения (80 вместо 8)
+      let pingValue = 0;
+      try {
+        pingValue = await testPing();
+        if (pingValue > 0) {
+          startTransition(() => {
+            setPing(pingValue);
+          });
+        }
+      } catch (error) {
+        logger.warn('speedtest', `Ошибка при измерении ping: ${error instanceof Error ? error.message : String(error)}`);
+      }
+
+      // Выполняем серию измерений download и upload
+      // Download и upload выполняются параллельно для каждого измерения
       for (let i = 0; i < SAMPLE_COUNT; i += 1) {
         try {
-          // Запускаем все три теста параллельно для каждого измерения
-          const results = await testAllSpeeds();
+          // Запускаем download и upload параллельно (без ping, так как он уже измерен)
+          const [download, upload] = await Promise.all([
+            testDownloadSpeed(),
+            testUploadSpeed()
+          ]);
           
           // Добавляем только валидные (не нулевые) значения в соответствующие серии
           // Это предотвращает занижение средних значений из-за rate limiting
           let hasValidResults = false;
           
-          if (results.download > 0) {
-            downloadSeries.push(results.download);
+          if (download > 0) {
+            downloadSeries.push(download);
             hasValidResults = true;
             startTransition(() => {
-              setDownloadSamples((prev) => [...prev, results.download]);
+              setDownloadSamples((prev) => [...prev, download]);
             });
           }
           
-          if (results.upload > 0) {
-            uploadSeries.push(results.upload);
+          if (upload > 0) {
+            uploadSeries.push(upload);
             hasValidResults = true;
             startTransition(() => {
-              setUploadSamples((prev) => [...prev, results.upload]);
+              setUploadSamples((prev) => [...prev, upload]);
             });
-          }
-          
-          if (results.ping > 0) {
-            pingSeries.push(results.ping);
-            hasValidResults = true;
-            // Обновляем ping только последним значением (обычно ping не меняется сильно)
-            if (i === SAMPLE_COUNT - 1) {
-              startTransition(() => {
-                setPing(results.ping);
-              });
-            }
           }
           
           // Если все результаты нулевые (возможно, rate limit), добавляем небольшую задержку
@@ -244,16 +246,16 @@ export default function Home() {
         uploadSeries.reduce((acc, value) => acc + value, 0) /
           Math.max(uploadSeries.length, 1),
       );
-      // Для ping используем медиану из всех измерений
-      // Используем функцию median, которая правильно обрабатывает четные массивы
-      const pingMedian = pingSeries.length > 0 
-        ? median(pingSeries)
-        : 0;
+      // Ping уже измерен один раз в начале, используем это значение
+      // Если ping не был измерен (ошибка), оставляем текущее значение или 0
 
       startTransition(() => {
         setDownloadAverage(downloadAvg);
         setUploadAverage(uploadAvg);
-        setPing(pingMedian);
+        // Ping уже установлен при измерении, обновляем только если есть новое значение
+        if (pingValue > 0) {
+          setPing(pingValue);
+        }
       });
     } finally {
       startTransition(() => {

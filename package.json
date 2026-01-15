@@ -3,6 +3,9 @@
   "description": "Check speed of internet connection",
   "version": "1.4.2",
   "private": true,
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "author": {
     "name": "Sergei Popov",
     "email": "contact@sergei-popov.ru"

@@ -1,5 +1,5 @@
-# Используем официальный образ Node.js
-FROM node:18-alpine
+# Используем официальный образ Node.js LTS
+FROM node:lts-alpine
 
 # Устанавливаем рабочую директорию в контейнере
 WORKDIR /app

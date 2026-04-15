@@ -25,6 +25,80 @@ type SpeedChartProps = {
   isMeasuring: boolean;
 };
 
+type MeasurementQuality = {
+  score: number;
+  label: string;
+  colorClass: string;
+  details: string;
+};
+
+const calculateVariation = (samples: number[]): number => {
+  if (samples.length < 2) {
+    return 1;
+  }
+  const avg = samples.reduce((acc, value) => acc + value, 0) / samples.length;
+  if (avg <= 0) {
+    return 1;
+  }
+  const variance =
+    samples.reduce((acc, value) => acc + (value - avg) ** 2, 0) / samples.length;
+  const stdDev = Math.sqrt(variance);
+  return stdDev / avg; // Коэффициент вариации
+};
+
+const getMeasurementQuality = (
+  downloadSamples: number[],
+  uploadSamples: number[],
+  ping: number | null,
+): MeasurementQuality => {
+  const validDownload = downloadSamples.filter((value) => value > 0);
+  const validUpload = uploadSamples.filter((value) => value > 0);
+  const completionRatio =
+    (validDownload.length + validUpload.length) / (SAMPLE_COUNT * 2);
+  const downloadVariation = calculateVariation(validDownload);
+  const uploadVariation = calculateVariation(validUpload);
+  const avgVariation = (downloadVariation + uploadVariation) / 2;
+  const pingFactor = ping !== null && ping > 0 ? 1 : 0.6;
+
+  // Чем ниже разброс и выше доля валидных измерений, тем выше индекс качества.
+  const stabilityScore = Math.max(0, 1 - Math.min(avgVariation, 1));
+  const score = Math.round((completionRatio * 0.55 + stabilityScore * 0.35 + pingFactor * 0.1) * 100);
+
+  if (score >= 85) {
+    return {
+      score,
+      label: 'Отличное',
+      colorClass: 'text-emerald-400',
+      details: 'Низкий разброс и достаточное число валидных измерений.'
+    };
+  }
+
+  if (score >= 65) {
+    return {
+      score,
+      label: 'Хорошее',
+      colorClass: 'text-blue-400',
+      details: 'Результаты пригодны, но есть умеренный разброс значений.'
+    };
+  }
+
+  if (score >= 40) {
+    return {
+      score,
+      label: 'Среднее',
+      colorClass: 'text-yellow-400',
+      details: 'Есть заметный шум сети или недостаток валидных измерений.'
+    };
+  }
+
+  return {
+    score,
+    label: 'Низкое',
+    colorClass: 'text-red-400',
+    details: 'Рекомендуется повторить тест в более стабильных условиях.'
+  };
+};
+
 function SpeedChart({
   title,
   samples,
@@ -276,6 +350,10 @@ export default function Home() {
   };
 
   const buttonLabel = isMeasuring ? "Идёт измерение…" : "Повторить измерение";
+  const measurementQuality = useMemo(
+    () => getMeasurementQuality(downloadSamples, uploadSamples, ping),
+    [downloadSamples, uploadSamples, ping],
+  );
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
@@ -365,6 +443,20 @@ export default function Home() {
               </span>
             )}
           </p>
+        </div>
+        <div className="w-full max-w-5xl rounded-xl border border-gray-800 bg-gray-900/70 p-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            <div>
+              <h3 className="text-base font-semibold text-gray-200">Качество измерения</h3>
+              <p className="text-sm text-gray-400">{measurementQuality.details}</p>
+            </div>
+            <div className="text-right">
+              <p className={`text-lg font-semibold ${measurementQuality.colorClass}`}>
+                {measurementQuality.label} ({measurementQuality.score}/100)
+              </p>
+              <p className="text-xs text-gray-500">Оценивается по стабильности и полноте серии</p>
+            </div>
+          </div>
         </div>
       </main>
       <footer className="flex mt-auto gap-6 flex-wrap items-center justify-center text-gray-500">

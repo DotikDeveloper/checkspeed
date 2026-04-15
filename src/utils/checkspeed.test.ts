@@ -16,10 +16,10 @@ const originalXMLHttpRequest = globalWithXhr.XMLHttpRequest;
 
 beforeEach(() => {
   // Отключаем логирование в тестах
-  vi.spyOn(logger, 'info').mockImplementation(() => {});
-  vi.spyOn(logger, 'debug').mockImplementation(() => {});
-  vi.spyOn(logger, 'warn').mockImplementation(() => {});
-  vi.spyOn(logger, 'error').mockImplementation(() => {});
+  vi.spyOn(logger, 'info').mockImplementation(function () {});
+  vi.spyOn(logger, 'debug').mockImplementation(function () {});
+  vi.spyOn(logger, 'warn').mockImplementation(function () {});
+  vi.spyOn(logger, 'error').mockImplementation(function () {});
 });
 
 afterEach(() => {
@@ -151,7 +151,9 @@ function createChunkReader(chunkCount = 2) {
 }
 
 function mockDownloadFetch() {
-  const fetchMock = vi.fn().mockImplementation(async () => createDownloadResponse());
+  const fetchMock = vi.fn().mockImplementation(async function () {
+    return createDownloadResponse();
+  });
   globalThis.fetch = fetchMock as typeof globalThis.fetch;
   return fetchMock;
 }
@@ -587,7 +589,7 @@ describe('testAllSpeeds', () => {
 
     // Мокаем XMLHttpRequest для upload
     let uploadCallCount = 0;
-    const xhrMock = vi.fn().mockImplementation(() => {
+    const xhrMock = vi.fn().mockImplementation(function () {
       const xhr = {
         open: vi.fn(),
         send: vi.fn(),
@@ -600,7 +602,7 @@ describe('testAllSpeeds', () => {
           addEventListener: vi.fn(),
           removeEventListener: vi.fn()
         },
-        addEventListener: vi.fn((event: string, handler: () => void) => {
+        addEventListener: vi.fn(function (event: string, handler: () => void) {
           if (event === 'load') {
             // Используем setTimeout с минимальной задержкой для симуляции асинхронности
             setTimeout(() => {

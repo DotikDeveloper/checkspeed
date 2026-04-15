@@ -7,31 +7,6 @@ const MAX_ALLOWED_BYTES = 5 * 1024 * 1024; // 5 МБ (соответствует
  * Не читает данные, только потребляет поток.
  * Важно: не отменяем reader, чтобы не блокировать тело запроса для других обработчиков.
  */
-const consumeRequestBody = async (request: Request): Promise<void> => {
-  if (!request.body) {
-    return;
-  }
-
-  const reader = request.body.getReader();
-  try {
-    while (true) {
-      const { done } = await reader.read();
-      if (done) {
-        break;
-      }
-    }
-  } catch {
-    // Игнорируем ошибки при чтении
-  }
-  // Не отменяем reader, чтобы не блокировать тело запроса
-  // Reader автоматически закроется при завершении чтения
-};
-
-/**
- * Оптимизированное чтение размера запроса.
- * Читаем поток до конца для проверки размера.
- * Важно: не отменяем reader, чтобы не блокировать тело запроса.
- */
 const readRequestSize = async (request: Request): Promise<number> => {
   if (!request.body) {
     return 0;
@@ -54,7 +29,6 @@ const readRequestSize = async (request: Request): Promise<number> => {
       
       // Если превышен лимит, продолжаем чтение до конца для корректного завершения потока
       if (totalBytes > MAX_ALLOWED_BYTES) {
-        // Продолжаем чтение до конца, чтобы не блокировать поток
         while (true) {
           const { done: isDone } = await reader.read();
           if (isDone) {
@@ -69,85 +43,43 @@ const readRequestSize = async (request: Request): Promise<number> => {
     if (err instanceof Error && err.message.includes('exceeds')) {
       throw err;
     }
-    // Для других ошибок просто возвращаем текущий размер
+    // Для других ошибок пробрасываем наверх
+    throw err;
   }
-  // Reader автоматически закроется при завершении чтения
 
   return totalBytes;
 };
 
 export async function POST(request: Request) {
-  // Клонируем запрос для безопасного чтения тела
-  // Это необходимо для предотвращения ошибки "Response body object should not be disturbed or locked"
-  // при параллельном выполнении нескольких запросов
-  let requestToRead = request;
   try {
-    // Пытаемся клонировать запрос для безопасного чтения
-    // Если клонирование не удалось (тело уже прочитано), используем оригинальный запрос
-    try {
-      requestToRead = request.clone();
-    } catch {
-      // Если клонирование не удалось, используем оригинальный запрос
-      requestToRead = request;
-    }
-  } catch {
-    // В случае ошибки используем оригинальный запрос
-    requestToRead = request;
-  }
-
-  try {
-    // Получаем Content-Length из заголовков, если доступен
     const contentLength = request.headers.get('content-length');
+    let declaredSize: number | null = null;
+
     if (contentLength) {
-      const size = parseInt(contentLength, 10);
-      
-      // Валидация: проверяем, что Content-Length является валидным числом
-      if (isNaN(size) || size < 0) {
-        // Если Content-Length невалиден, потребляем тело и возвращаем ошибку
-        try {
-          await consumeRequestBody(requestToRead);
-        } catch {
-          // Игнорируем ошибки при потреблении тела
-        }
+      const parsedSize = parseInt(contentLength, 10);
+      if (Number.isNaN(parsedSize) || parsedSize < 0) {
         return NextResponse.json({ error: 'Invalid Content-Length header' }, { status: 400 });
       }
-      
-      if (size > MAX_ALLOWED_BYTES) {
-        // Потребляем тело запроса перед возвратом ошибки
-        try {
-          await consumeRequestBody(requestToRead);
-        } catch {
-          // Игнорируем ошибки при потреблении тела
-        }
+      if (parsedSize > MAX_ALLOWED_BYTES) {
         return NextResponse.json({ error: 'Payload exceeds allowed limit' }, { status: 413 });
       }
-      
-      // Если Content-Length доступен и валиден, используем его вместо чтения потока
-      // Потребляем тело запроса, чтобы избежать проблем в serverless окружениях
-      try {
-        await consumeRequestBody(requestToRead);
-      } catch {
-        // Игнорируем ошибки при потреблении тела
-      }
-      return NextResponse.json({ size });
+      declaredSize = parsedSize;
     }
 
-    // Если Content-Length недоступен, читаем поток (но это медленнее)
-    const size = await readRequestSize(requestToRead);
-    return NextResponse.json({ size });
-  } catch (err) {
-    console.error('Upload error:', err);
-    
-    // Пытаемся потреблять тело запроса даже при ошибке
-    try {
-      await consumeRequestBody(requestToRead);
-    } catch {
-      // Игнорируем ошибки при потреблении тела
+    // Всегда считаем фактический размер тела запроса.
+    // Это защищает от некорректного Content-Length и даёт точное измерение upload.
+    const actualSize = await readRequestSize(request);
+
+    if (declaredSize !== null && declaredSize !== actualSize) {
+      return NextResponse.json({ error: 'Content-Length does not match payload size' }, { status: 400 });
     }
-    
+
+    return NextResponse.json({ size: actualSize });
+  } catch (err) {
     if (err instanceof Error && err.message.includes('exceeds')) {
       return NextResponse.json({ error: 'Payload exceeds allowed limit' }, { status: 413 });
     }
+    console.error('Upload error:', err);
     return NextResponse.json({ error: 'Upload failed' }, { status: 500 });
   }
 }

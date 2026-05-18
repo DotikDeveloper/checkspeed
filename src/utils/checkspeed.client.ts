@@ -7,8 +7,10 @@ export { average, averageWithoutColdStart, median, removeOutliers };
 
 // Оптимизированные настройки: меньше запросов, больше размеры файлов
 // Было: [0.5, 1, 2, 3] × 3 измерения = 12 запросов на download/upload
-// Стало: [2, 5] × 2 измерения = 4 запроса на download/upload
-const FILE_SIZES_MB = [2, 5] as const;
+// [2, 5, 8] МБ × 2 измерения × 3 параллельных потока (как RMBT/Ookla)
+const FILE_SIZES_MB = [2, 5, 8] as const;
+/** Параллельных TCP-потоков на одно направление (download или upload). */
+export const PARALLEL_STREAMS = 3;
 const MEASUREMENTS_PER_SIZE = 2;
 const MAX_RETRY_ATTEMPTS_PER_SIZE = 1;
 const RETRY_BASE_DELAY_MS = 200;
@@ -55,6 +57,60 @@ const megabytesToBytes = (sizeMb: number) => Math.round(sizeMb * 1024 * 1024);
 export const createUploadPayload = (sizeMb: number): Uint8Array =>
   new Uint8Array(megabytesToBytes(sizeMb));
 
+export type TransferSample = {
+  bytesTransferred: number;
+  requestStartMs: number;
+  firstChunkTimeMs: number | null;
+  lastChunkTimeMs: number;
+};
+
+/** Делит объём на N частей для параллельных потоков (сумма байт сохраняется). */
+export const splitBytesAcrossStreams = (totalBytes: number, streamCount: number): number[] => {
+  if (streamCount <= 0) {
+    return [totalBytes];
+  }
+
+  const base = Math.floor(totalBytes / streamCount);
+  const parts: number[] = [];
+  let allocated = 0;
+
+  for (let i = 0; i < streamCount; i += 1) {
+    const bytes = i === streamCount - 1 ? totalBytes - allocated : base;
+    parts.push(bytes);
+    allocated += bytes;
+  }
+
+  return parts;
+};
+
+export const bytesToSizeMbParam = (bytes: number): number => bytes / (1024 * 1024);
+
+/** Суммарная скорость параллельных потоков за окно передачи payload. */
+export const aggregateParallelTransferSpeed = (streams: TransferSample[]): number => {
+  const successful = streams.filter((stream) => stream.bytesTransferred > 0);
+  if (successful.length === 0) {
+    return 0;
+  }
+
+  const totalBytes = successful.reduce((sum, stream) => sum + stream.bytesTransferred, 0);
+  const requestStartMs = Math.min(...successful.map((stream) => stream.requestStartMs));
+  const firstChunkTimeMs = Math.min(
+    ...successful.map((stream) => stream.firstChunkTimeMs ?? stream.requestStartMs),
+  );
+  const lastChunkTimeMs = Math.max(...successful.map((stream) => stream.lastChunkTimeMs));
+  const throughputDurationMs = resolveThroughputDurationMs(
+    requestStartMs,
+    firstChunkTimeMs,
+    lastChunkTimeMs,
+  );
+
+  if (throughputDurationMs <= 0) {
+    return 0;
+  }
+
+  return bytesToMbps(totalBytes, throughputDurationMs / 1000);
+};
+
 type SpeedSample = {
   speed: number;
   sizeMb: number;
@@ -87,19 +143,16 @@ const aggregateSpeedSamples = (samples: SpeedSample[]): number => {
   return weightedNumerator / totalWeight;
 };
 
-const measureDownloadOnce = async (sizeMb: number): Promise<number> => {
+const measureDownloadStream = async (sizeMb: number): Promise<TransferSample | null> => {
   const requestStart = performance.now();
-  logger.debug('download', `Начало измерения download для размера ${sizeMb} МБ`);
-
   const response = await fetch(buildDownloadUrl(sizeMb));
-  const ttfb = performance.now() - requestStart; // Time To First Byte
+  const ttfb = performance.now() - requestStart;
 
   if (!response.ok) {
-    // 429 (Too Many Requests) - это ожидаемое поведение rate limiting, не ошибка
     if (response.status === 429) {
       const retryAfter = response.headers.get('Retry-After') || 'неизвестно';
       logger.warn('download', `Rate limit превышен (429). Retry-After: ${retryAfter} сек`);
-      return 0;
+      return null;
     }
     logger.error('download', `Запрос завершился с ошибкой: ${response.status}`);
     throw new Error(`Download request failed with status ${response.status}`);
@@ -109,7 +162,7 @@ const measureDownloadOnce = async (sizeMb: number): Promise<number> => {
     throw new Error('Readable stream is not available for the download response.');
   }
 
-  logger.debug('download', `TTFB: ${ttfb.toFixed(2)} мс`);
+  logger.debug('download', `TTFB потока ${sizeMb.toFixed(2)} МБ: ${ttfb.toFixed(2)} мс`);
 
   const reader = response.body.getReader();
   let bytesTransferred = 0;
@@ -128,35 +181,43 @@ const measureDownloadOnce = async (sizeMb: number): Promise<number> => {
     const chunkTime = performance.now();
     if (firstChunkTime === null) {
       firstChunkTime = chunkTime;
-      logger.debug('download', `Первый чанк получен через ${(chunkTime - requestStart).toFixed(2)} мс`);
     }
     lastChunkTime = chunkTime;
     bytesTransferred += value.byteLength;
   }
 
-  const totalDuration = lastChunkTime - requestStart;
-  const transferDuration = firstChunkTime ? lastChunkTime - firstChunkTime : totalDuration;
-  const throughputDurationMs = resolveThroughputDurationMs(requestStart, firstChunkTime, lastChunkTime);
+  return {
+    bytesTransferred,
+    requestStartMs: requestStart,
+    firstChunkTimeMs: firstChunkTime,
+    lastChunkTimeMs: lastChunkTime,
+  };
+};
 
-  if (throughputDurationMs <= 0 || bytesTransferred === 0) {
-    logger.warn('download', `Некорректные данные: duration=${throughputDurationMs}ms, bytes=${bytesTransferred}`);
+const measureDownloadOnce = async (sizeMb: number): Promise<number> => {
+  logger.debug('download', `Начало измерения download ${sizeMb} МБ (${PARALLEL_STREAMS} потоков)`);
+
+  const totalBytes = megabytesToBytes(sizeMb);
+  const partSizesMb = splitBytesAcrossStreams(totalBytes, PARALLEL_STREAMS).map(bytesToSizeMbParam);
+
+  const streamResults = await Promise.all(partSizesMb.map((partMb) => measureDownloadStream(partMb)));
+  if (streamResults.some((sample) => sample === null)) {
     return 0;
   }
 
-  // Скорость считаем только по времени передачи полезной нагрузки (без TTFB/установки соединения).
-  const durationSeconds = throughputDurationMs / 1000;
-  const speed = bytesToMbps(bytesTransferred, durationSeconds);
+  const speed = aggregateParallelTransferSpeed(streamResults as TransferSample[]);
+  const totalBytesTransferred = (streamResults as TransferSample[]).reduce(
+    (sum, stream) => sum + stream.bytesTransferred,
+    0,
+  );
 
   logger.info('download', `Измерение завершено`, {
     sizeMb,
-    bytesTransferred,
-    totalDurationMs: totalDuration.toFixed(2),
-    transferDurationMs: transferDuration.toFixed(2),
-    ttfbMs: ttfb.toFixed(2),
-    speedMbps: speed.toFixed(2)
+    streams: PARALLEL_STREAMS,
+    bytesTransferred: totalBytesTransferred,
+    speedMbps: speed.toFixed(2),
   });
 
-  // Валидация: скорость не должна быть нереалистично высокой (>100 Гбит/с)
   const MAX_REALISTIC_SPEED_MBPS = 100000;
   if (speed > MAX_REALISTIC_SPEED_MBPS) {
     logger.warn('download', `Подозрительно высокая скорость: ${speed.toFixed(2)} Мбит/с`);
@@ -229,54 +290,39 @@ export const testDownloadSpeed = async (): Promise<number> => {
   return rounded;
 };
 
-const measureUploadOnce = (sizeMb: number): Promise<number> =>
+const measureUploadPart = (payload: Uint8Array): Promise<TransferSample | null> =>
   new Promise((resolve, reject) => {
     const requestStart = performance.now();
-    logger.debug('upload', `Начало измерения upload для размера ${sizeMb} МБ`);
-
-    const payload = createUploadPayload(sizeMb);
     const xhr = new XMLHttpRequest();
 
     let startTime: number | null = null;
     let endTime: number | null = null;
-    let progressStartTime: number | null = null;
 
-    const handleLoadStart = () => {
-      startTime = performance.now();
-      logger.debug('upload', `Upload начат через ${(startTime - requestStart).toFixed(2)} мс после создания запроса`);
-    };
-
-    const handleProgress = (event: ProgressEvent) => {
-      if (progressStartTime === null && event.loaded > 0) {
-        progressStartTime = performance.now();
-        logger.debug('upload', `Первый байт отправлен через ${(progressStartTime - (startTime ?? requestStart)).toFixed(2)} мс`);
-      }
-    };
-
-    const handleLoadEnd = () => {
-      endTime = performance.now();
-      logger.debug('upload', `Upload завершён, общее время: ${endTime - (startTime ?? requestStart)} мс`);
-    };
-
-    // Объявляем обработчики, которые вызывают cleanup
     let handleUploadError: () => void;
     let handleUploadAbort: () => void;
     let handleRequestError: () => void;
     let handleLoad: () => void;
     let handleTimeout: () => void;
+    let handleLoadStart: () => void;
+    let handleLoadEnd: () => void;
 
-    // Определяем cleanup перед обработчиками, которые её используют
-    // Используем function declaration для hoisting
     function cleanup() {
       xhr.upload.removeEventListener('loadstart', handleLoadStart);
       xhr.upload.removeEventListener('loadend', handleLoadEnd);
-      xhr.upload.removeEventListener('progress', handleProgress);
       xhr.upload.removeEventListener('error', handleUploadError);
       xhr.upload.removeEventListener('abort', handleUploadAbort);
       xhr.removeEventListener('error', handleRequestError);
       xhr.removeEventListener('timeout', handleTimeout);
       xhr.removeEventListener('load', handleLoad);
     }
+
+    handleLoadStart = () => {
+      startTime = performance.now();
+    };
+
+    handleLoadEnd = () => {
+      endTime = performance.now();
+    };
 
     handleUploadError = () => {
       cleanup();
@@ -292,14 +338,12 @@ const measureUploadOnce = (sizeMb: number): Promise<number> =>
 
     handleRequestError = () => {
       cleanup();
-      // 429 (Too Many Requests) - это ожидаемое поведение rate limiting, не ошибка
       if (xhr.status === 429) {
         const retryAfter = xhr.getResponseHeader('Retry-After') || 'неизвестно';
         logger.warn('upload', `Rate limit превышен (429). Retry-After: ${retryAfter} сек`);
-        resolve(0);
+        resolve(null);
         return;
       }
-      // Статус 0 обычно означает таймаут или сетевая ошибка
       if (xhr.status === 0) {
         logger.error('upload', 'Запрос завершился с таймаутом или сетевой ошибкой');
         reject(new Error('Upload request timed out or network error'));
@@ -311,51 +355,38 @@ const measureUploadOnce = (sizeMb: number): Promise<number> =>
 
     handleLoad = () => {
       cleanup();
-      // Проверяем статус ответа - 429 может прийти через событие load
       if (xhr.status === 429) {
         const retryAfter = xhr.getResponseHeader('Retry-After') || 'неизвестно';
         logger.warn('upload', `Rate limit превышен (429). Retry-After: ${retryAfter} сек`);
-        resolve(0);
+        resolve(null);
         return;
       }
       if (startTime === null || endTime === null || endTime <= startTime) {
         logger.warn('upload', 'Некорректные временные метки');
-        resolve(0);
+        resolve(null);
         return;
       }
-      const durationSeconds = (endTime - startTime) / 1000;
-      const speed = bytesToMbps(payload.byteLength, durationSeconds);
 
-      logger.info('upload', `Измерение завершено`, {
-        sizeMb,
+      resolve({
         bytesTransferred: payload.byteLength,
-        durationMs: (endTime - startTime).toFixed(2),
-        speedMbps: speed.toFixed(2)
+        requestStartMs: requestStart,
+        firstChunkTimeMs: startTime,
+        lastChunkTimeMs: endTime,
       });
-
-      // Валидация скорости
-      const MAX_REALISTIC_SPEED_MBPS = 100000;
-      if (speed > MAX_REALISTIC_SPEED_MBPS) {
-        logger.warn('upload', `Подозрительно высокая скорость: ${speed.toFixed(2)} Мбит/с`);
-      }
-
-      resolve(speed);
     };
 
     handleTimeout = () => {
       cleanup();
-      logger.error('upload', 'Запрос превысил таймаут (30 секунд)');
-      reject(new Error('Upload request timed out after 30 seconds'));
+      logger.error('upload', 'Запрос превысил таймаут (60 секунд)');
+      reject(new Error('Upload request timed out after 60 seconds'));
     };
 
     xhr.open('POST', UPLOAD_ENDPOINT);
     xhr.responseType = 'json';
-    // 30 с — лимит для serverless (Vercel); достаточно для payload до 5 МБ
-    xhr.timeout = 30000; // 30 секунд таймаут
+    xhr.timeout = 60000;
 
     xhr.upload.addEventListener('loadstart', handleLoadStart);
     xhr.upload.addEventListener('loadend', handleLoadEnd);
-    xhr.upload.addEventListener('progress', handleProgress);
     xhr.upload.addEventListener('error', handleUploadError);
     xhr.upload.addEventListener('abort', handleUploadAbort);
     xhr.addEventListener('error', handleRequestError);
@@ -365,6 +396,44 @@ const measureUploadOnce = (sizeMb: number): Promise<number> =>
     const bodyView = payload.slice();
     xhr.send(bodyView.buffer);
   });
+
+const measureUploadOnce = async (sizeMb: number): Promise<number> => {
+  logger.debug('upload', `Начало измерения upload ${sizeMb} МБ (${PARALLEL_STREAMS} потоков)`);
+
+  const payload = createUploadPayload(sizeMb);
+  const partSizes = splitBytesAcrossStreams(payload.byteLength, PARALLEL_STREAMS);
+  let offset = 0;
+  const parts = partSizes.map((length) => {
+    const slice = payload.subarray(offset, offset + length);
+    offset += length;
+    return slice;
+  });
+
+  const streamResults = await Promise.all(parts.map((part) => measureUploadPart(part)));
+  if (streamResults.some((sample) => sample === null)) {
+    return 0;
+  }
+
+  const speed = aggregateParallelTransferSpeed(streamResults as TransferSample[]);
+  const totalBytesTransferred = (streamResults as TransferSample[]).reduce(
+    (sum, stream) => sum + stream.bytesTransferred,
+    0,
+  );
+
+  logger.info('upload', `Измерение завершено`, {
+    sizeMb,
+    streams: PARALLEL_STREAMS,
+    bytesTransferred: totalBytesTransferred,
+    speedMbps: speed.toFixed(2),
+  });
+
+  const MAX_REALISTIC_SPEED_MBPS = 100000;
+  if (speed > MAX_REALISTIC_SPEED_MBPS) {
+    logger.warn('upload', `Подозрительно высокая скорость: ${speed.toFixed(2)} Мбит/с`);
+  }
+
+  return speed;
+};
 
 /** Выполняет несколько последовательных измерений для одного размера файла. */
 const measureUploadForSize = async (sizeMb: number): Promise<number> => {
@@ -505,10 +574,10 @@ export async function testPing(): Promise<number> {
   
   logger.debug('ping', `После удаления выбросов: ${cleanedMeasurements.map(v => v.toFixed(2)).join(', ')} мс`);
 
-  const representativeLatency = median(cleanedMeasurements);
+  const representativeLatency = Math.min(...cleanedMeasurements);
   const rounded = Number(representativeLatency.toFixed(PING_PRECISION));
 
-  logger.info('ping', `Итоговый пинг: ${rounded} мс (медиана: ${representativeLatency.toFixed(2)})`);
+  logger.info('ping', `Итоговый пинг: ${rounded} мс (минимум: ${representativeLatency.toFixed(2)})`);
 
   return rounded;
 }

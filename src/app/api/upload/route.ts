@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-const MAX_ALLOWED_BYTES = 5 * 1024 * 1024; // 5 МБ (соответствует максимальному размеру файла в тестах)
+const MAX_ALLOWED_BYTES = 10 * 1024 * 1024; // 10 МБ (максимальный размер в /api/download)
 
 /**
  * Потребляет тело запроса полностью, чтобы избежать проблем в serverless окружениях.

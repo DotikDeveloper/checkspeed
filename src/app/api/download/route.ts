@@ -1,3 +1,4 @@
+import { randomFillSync } from 'node:crypto';
 import { NextRequest } from 'next/server';
 import { BufferPool } from '../utils/buffer-pool';
 
@@ -23,7 +24,7 @@ export async function GET(request: NextRequest) {
 
   const sizeBytes = megabytesToBytes(normalizedSizeMb);
   const buffer = bufferPool.get(sizeBytes);
-  buffer.fill('x');
+  randomFillSync(buffer);
 
   // Создаём копию буфера для Response, чтобы избежать гонки данных при параллельных запросах.
   // Response не копирует содержимое, а использует ссылку, поэтому нужна явная копия.

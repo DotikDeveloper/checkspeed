@@ -37,7 +37,7 @@ describe('POST /api/upload', () => {
   });
 
   it('возвращает 413 для payload больше лимита', async () => {
-    const payload = new Uint8Array(6 * ONE_MB_BYTES);
+    const payload = new Uint8Array(11 * ONE_MB_BYTES);
     const request = new Request('http://localhost/api/upload', {
       method: 'POST',
       body: payload

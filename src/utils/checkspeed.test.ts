@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  aggregateParallelTransferSpeed,
   bytesToMbps,
   createUploadPayload,
+  PARALLEL_STREAMS,
   resolveThroughputDurationMs,
+  splitBytesAcrossStreams,
   testAllSpeeds,
   testDownloadSpeed,
   testPing,
@@ -15,9 +18,11 @@ import { logger } from './logger';
 const DOWNLOAD_BYTES_TOTAL = 1024 * 1024;
 const DOWNLOAD_CHUNK_BYTES = DOWNLOAD_BYTES_TOTAL / 2;
 // Обновлено в соответствии с новыми настройками в checkspeed.client.ts
-const FILE_SIZES_MB = [2, 5] as const;
+const FILE_SIZES_MB = [2, 5, 8] as const;
 const MEASUREMENTS_PER_SIZE = 2;
 const PING_ATTEMPTS = 8;
+const DOWNLOAD_FETCH_COUNT = FILE_SIZES_MB.length * MEASUREMENTS_PER_SIZE * PARALLEL_STREAMS;
+const UPLOAD_XHR_COUNT = DOWNLOAD_FETCH_COUNT;
 const globalWithXhr = globalThis as typeof globalThis & { XMLHttpRequest?: typeof XMLHttpRequest };
 const originalFetch = globalThis.fetch;
 const originalXMLHttpRequest = globalWithXhr.XMLHttpRequest;
@@ -43,8 +48,9 @@ afterEach(() => {
 
 // Обновлено для 2 размеров файлов × 2 измерения
 const SPEED_MATRIX: number[][] = [
-  [50, 60], // для размера 2 МБ
-  [80, 90]  // для размера 5 МБ
+  [50, 60],
+  [80, 90],
+  [100, 110],
 ];
 
 // TTFB (Time To First Byte) в миллисекундах для симуляции
@@ -56,11 +62,18 @@ const downloadDurationsMs = SPEED_MATRIX.flat().map((speed) => {
   return transferTimeMs;
 });
 
-const MEASUREMENT_COUNT = FILE_SIZES_MB.length * MEASUREMENTS_PER_SIZE;
-
 const uploadDurationsMs = SPEED_MATRIX.flatMap((group, index) =>
   group.map((speed) => ((FILE_SIZES_MB[index] * 8) / speed) * 1000)
 );
+
+function queueMonotonicPerformance(stepMs = 1) {
+  let cursor = 0;
+  return vi.spyOn(performance, 'now').mockImplementation(() => {
+    const now = cursor;
+    cursor += stepMs;
+    return now;
+  });
+}
 
 function queuePerformanceTimeline(durations: number[], ttfbMs: number = 10) {
   const values: number[] = [];
@@ -254,6 +267,36 @@ describe('resolveThroughputDurationMs', () => {
   });
 });
 
+describe('splitBytesAcrossStreams', () => {
+  it('сохраняет суммарный объём при делении', () => {
+    const totalBytes = 8 * 1024 * 1024;
+    const parts = splitBytesAcrossStreams(totalBytes, PARALLEL_STREAMS);
+    expect(parts).toHaveLength(PARALLEL_STREAMS);
+    expect(parts.reduce((sum, part) => sum + part, 0)).toBe(totalBytes);
+  });
+});
+
+describe('aggregateParallelTransferSpeed', () => {
+  it('суммирует байты параллельных потоков за общее окно передачи', () => {
+    const speed = aggregateParallelTransferSpeed([
+      {
+        bytesTransferred: 512 * 1024,
+        requestStartMs: 0,
+        firstChunkTimeMs: 10,
+        lastChunkTimeMs: 210,
+      },
+      {
+        bytesTransferred: 512 * 1024,
+        requestStartMs: 5,
+        firstChunkTimeMs: 15,
+        lastChunkTimeMs: 205,
+      },
+    ]);
+
+    expect(speed).toBeCloseTo(bytesToMbps(1024 * 1024, 0.2), 1);
+  });
+});
+
 describe('bytesToMbps', () => {
   it('конвертирует байты и секунды в Мбит/с', () => {
     const oneMbInBytes = 1 * 1024 * 1024;
@@ -388,12 +431,12 @@ describe('removeOutliers', () => {
 describe('testDownloadSpeed', () => {
   it('агрегирует результаты измерений и округляет итоговую скорость', async () => {
     const fetchMock = mockDownloadFetch();
-    queuePerformanceTimeline(downloadDurationsMs, TTFB_MS);
+    queueMonotonicPerformance();
 
     const result = await testDownloadSpeed();
 
     expect(result).toBeGreaterThan(0);
-    expect(fetchMock).toHaveBeenCalledTimes(MEASUREMENT_COUNT);
+    expect(fetchMock).toHaveBeenCalledTimes(DOWNLOAD_FETCH_COUNT);
   });
 
   it('пропускает неудачные попытки и продолжает измерения', async () => {
@@ -425,9 +468,8 @@ describe('testDownloadSpeed', () => {
 
 describe('testUploadSpeed', () => {
   it('агрегирует измерения отдачи и возвращает округлённое значение', async () => {
-    // Для upload используем специальную функцию, которая учитывает requestStart
-    queueUploadPerformanceTimeline(uploadDurationsMs, 5);
-    stubXmlHttpRequest(Array.from({ length: MEASUREMENT_COUNT }, () => ({})));
+    queueMonotonicPerformance();
+    stubXmlHttpRequest(Array.from({ length: UPLOAD_XHR_COUNT }, () => ({})));
 
     const result = await testUploadSpeed();
 
@@ -440,9 +482,9 @@ describe('testUploadSpeed', () => {
     // Первая попытка с ошибкой, остальные успешные
     stubXmlHttpRequest([
       { failWith: 'upload-error' },
-      ...Array.from({ length: MEASUREMENT_COUNT - 1 }, () => ({}))
+      ...Array.from({ length: UPLOAD_XHR_COUNT - 1 }, () => ({})),
     ]);
-    queueUploadPerformanceTimeline(uploadDurationsMs, 5);
+    queueMonotonicPerformance();
 
     const result = await testUploadSpeed();
 
@@ -453,7 +495,7 @@ describe('testUploadSpeed', () => {
   it('возвращает 0 если все попытки провалились', async () => {
     // Все попытки с ошибкой
     stubXmlHttpRequest(
-      Array.from({ length: MEASUREMENT_COUNT }, () => ({ failWith: 'upload-error' }))
+      Array.from({ length: UPLOAD_XHR_COUNT }, () => ({ failWith: 'upload-error' })),
     );
 
     const result = await testUploadSpeed();
@@ -466,9 +508,9 @@ describe('testUploadSpeed', () => {
     // Первая попытка с таймаутом, остальные успешные
     stubXmlHttpRequest([
       { failWith: 'timeout', status: 0 },
-      ...Array.from({ length: MEASUREMENT_COUNT - 1 }, () => ({}))
+      ...Array.from({ length: UPLOAD_XHR_COUNT - 1 }, () => ({})),
     ]);
-    queueUploadPerformanceTimeline(uploadDurationsMs, 5);
+    queueMonotonicPerformance();
 
     const result = await testUploadSpeed();
 
@@ -500,7 +542,7 @@ function queuePingTimeline(latencies: number[]) {
 }
 
 describe('testPing', () => {
-  it('возвращает медианное значение задержки с округлением до десятых', async () => {
+  it('возвращает минимальную задержку с округлением до десятых', async () => {
     const latencies = [30, 28, 29, 31, 32, 33, 34, 35, 36, 37];
     const fetchMock = vi.fn().mockResolvedValue({ ok: true } as Response);
     globalThis.fetch = fetchMock as typeof globalThis.fetch;
@@ -508,11 +550,8 @@ describe('testPing', () => {
 
     const result = await testPing();
 
-    // После обрезки первого и последнего: [28, 29, 31, 32, 33, 34, 35, 36]
-    // Медиана: (32 + 33) / 2 = 32.5
-    // Но после removeOutliers может быть другой результат, поэтому проверяем диапазон
     expect(result).toBeGreaterThanOrEqual(28);
-    expect(result).toBeLessThanOrEqual(36);
+    expect(result).toBeLessThanOrEqual(31);
     expect(fetchMock).toHaveBeenCalledTimes(PING_ATTEMPTS);
   });
 

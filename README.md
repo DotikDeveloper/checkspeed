@@ -1,70 +1,104 @@
-# CheckSpeed Application
+# CheckSpeed
 
-Веб-приложение для измерения скорости интернет-соединения, построенное на современном стеке Next.js 16 + React 19. Актуальная версия доступна по адресу **https://checkspeed.vercel.app/**.
+**Версия:** 1.5.0
+
+Веб-приложение для измерения скорости сетевого соединения (получение, отдача, ping). Подходит для проверки канала в интернете или во внутренней сети при развёртывании на собственном сервере.
+
+**Демо:** https://checkspeed.vercel.app/
 
 ## Возможности
 
-- измерение скорости загрузки и отдачи данных, включая потоковые тесты с несколькими размерами файлов;
-- вычисление текущего ping;
-- отображение динамики измерений на графиках и расчёт средней скорости;
-- готовность к деплою и на Vercel, и в Docker-контейнерах.
+- измерение скорости **получения** и **отдачи** с несколькими размерами payload (2, 5, 8 МБ);
+- **3 параллельных TCP-потока** на направление для насыщения быстрых каналов;
+- расчёт **ping** (минимум успешных замеров);
+- графики динамики и **10 итераций** с усреднением;
+- индикатор **качества измерения** (стабильность и полнота серии);
+- rate limiting API, защита от сжатия payload (случайные байты);
+- деплой на **Vercel** или в **Docker**.
 
 ## Технологии
 
-- Next.js 16 (App Router)
-- React 19
-- TypeScript 5
-- Tailwind CSS
-- Docker
-
-## Деплой
-
-Проект развёрнут на Vercel: https://checkspeed.vercel.app/.
-
-При публикации новой версии:
-
-```bash
-npm run build       # убедиться, что build проходит локально
-npm run lint        # проверить качество кода
-git push            # после пуша Vercel автоматически инициирует деплой
-```
+| Компонент | Версия |
+|-----------|--------|
+| Next.js (App Router) | 16 |
+| React | 19 |
+| TypeScript | 5 |
+| Tailwind CSS | 4 |
+| Node.js | ^24 |
 
 ## Быстрый старт
 
 ```bash
-git clone <repo>
+git clone https://github.com/DotikDeveloper/checkspeed.git
 cd checkspeed
 npm install
 npm run dev
 ```
 
+Откройте http://localhost:3000 — измерение начнётся автоматически.
+
 ### Проверки качества
 
 ```bash
-npm run lint   # ESLint (flat-config на базе eslint-config-next)
-npm run test   # Vitest — unit-тесты расчётов скорости
-npm run build  # production-сборка Next.js
+npm run lint   # ESLint
+npm run test   # Vitest (40 тестов)
+npm run build  # production-сборка
 ```
 
-## Запуск в Docker
+## Docker
 
 ```bash
 docker build -t checkspeed .
 docker run -p 3000:3000 checkspeed
 ```
 
-После запуска контейнера приложение доступно на `http://localhost:3000`.
+Приложение: http://localhost:3000
+
+## Документация
+
+| Документ | Содержание |
+|----------|------------|
+| [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | Структура проекта, слои, потоки данных |
+| [docs/MEASUREMENT.md](./docs/MEASUREMENT.md) | Методика измерения, константы, агрегация |
+| [docs/API.md](./docs/API.md) | HTTP API: download, upload, ping |
+| [CHANGELOG.md](./CHANGELOG.md) | История версий |
+
+## API (кратко)
+
+| Метод | Путь | Назначение |
+|-------|------|------------|
+| `GET` | `/api/download?size=<МБ>` | Бинарный payload 0,5–10 МБ |
+| `POST` | `/api/upload` | Приём тела до 10 МБ, ответ `{ size }` |
+| `HEAD` | `/api/ping` | Задержка (204) |
+
+Лимит: **500 запросов/мин** на IP. Подробности — [docs/API.md](./docs/API.md).
+
+## Деплой
+
+### Vercel
+
+```bash
+npm run build
+npm run lint
+git push origin master
+```
+
+После push Vercel выполняет автоматический деплой.
+
+### Собственный сервер
+
+Соберите production-образ или выполните `npm run build && npm run start` за reverse-proxy (nginx, Caddy) с TLS.
 
 ## Версионирование
 
-- текущая версия хранится в `package.json`;
-- история изменений описывается в [CHANGELOG.md](./CHANGELOG.md);
-- для выпуска новой версии используйте `npm version <patch|minor|major>` — команда обновит номер версии и создаст Git-тег.
+- номер версии — в `package.json`;
+- история — [CHANGELOG.md](./CHANGELOG.md);
+- релиз: `npm version minor` (или `patch` / `major`) и push с тегами.
 
 ## Вклад в проект
 
-Мы приветствуем вклад в развитие проекта. Перед созданием pull request ознакомьтесь с [CONTRIBUTING.md](CONTRIBUTING.md).
+См. [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## Лицензия
 
-Проект распространяется под лицензией MIT. Полный текст доступен в файле [LICENSE](LICENSE).
+MIT — [LICENSE](./LICENSE).

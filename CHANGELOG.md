@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.5.0 — 18.05.2026
+
+### Точность измерения скорости
+- **последовательные направления**: ping → download → upload; в UI download и upload не конкурируют за канал;
+- **последовательные размеры файлов**: 2, 5, 8 МБ измеряются по очереди;
+- **3 параллельных TCP-потока** на download/upload внутри одного направления (модель RMBT/Ookla);
+- **`aggregateParallelTransferSpeed`**: суммарный throughput по окну передачи payload всех потоков;
+- **download без TTFB** в знаменателе скорости (`resolveThroughputDurationMs`);
+- **ping**: минимум успешных замеров; нулевые значения (429) исключаются;
+- **случайный payload** на download (`randomFillSync`) — защита от сжатия прокси;
+- **upload**: лимит 10 МБ, таймаут 60 с; rate limit увеличен до **500 запросов/мин**.
+
+### Документация
+- обновлён [README.md](./README.md);
+- добавлены [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md), [docs/MEASUREMENT.md](./docs/MEASUREMENT.md), [docs/API.md](./docs/API.md).
+
 ## 1.4.2 — 15.01.2026
 
 ### Обновление Зависимостей для Безопасности

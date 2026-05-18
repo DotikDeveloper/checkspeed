@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { bytesToMbps, createUploadPayload, testAllSpeeds, testDownloadSpeed, testPing, testUploadSpeed } from './checkspeed.client';
+import {
+  bytesToMbps,
+  createUploadPayload,
+  resolveThroughputDurationMs,
+  testAllSpeeds,
+  testDownloadSpeed,
+  testPing,
+  testUploadSpeed,
+} from './checkspeed.client';
 import { average, averageWithoutColdStart, median, removeOutliers } from './stats';
 import { logger } from './logger';
 
@@ -42,33 +50,11 @@ const SPEED_MATRIX: number[][] = [
 // TTFB (Time To First Byte) в миллисекундах для симуляции
 const TTFB_MS = 10;
 
-// Пересчитываем ожидаемую скорость с учетом TTFB
-// Для каждого измерения: общее время = TTFB + время передачи
-// Скорость = (байты * 8) / (общее время в секундах)
-const calculateExpectedSpeed = (bytesMb: number, transferTimeMs: number, ttfbMs: number): number => {
-  const totalTimeMs = ttfbMs + transferTimeMs;
-  const bytes = bytesMb * 1024 * 1024;
-  const megabits = (bytes * 8) / (1024 * 1024);
-  return megabits / (totalTimeMs / 1000);
-};
-
 const downloadDurationsMs = SPEED_MATRIX.flat().map((speed) => {
   // Время передачи 1 МБ на данной скорости
   const transferTimeMs = (8 / speed) * 1000;
   return transferTimeMs;
 });
-
-// Пересчитываем ожидаемую скорость с учетом TTFB
-const downloadSpeedsWithTTFB = SPEED_MATRIX.flat().map((speed, index) => {
-  const sizeMb = FILE_SIZES_MB[Math.floor(index / MEASUREMENTS_PER_SIZE)];
-  const transferTimeMs = (sizeMb * 8 / speed) * 1000;
-  return calculateExpectedSpeed(sizeMb, transferTimeMs, TTFB_MS);
-});
-
-// Усредняем с учетом статистической обработки
-const EXPECTED_AGGREGATED_SPEED = Math.round(
-  downloadSpeedsWithTTFB.reduce((a, b) => a + b, 0) / downloadSpeedsWithTTFB.length
-);
 
 const MEASUREMENT_COUNT = FILE_SIZES_MB.length * MEASUREMENTS_PER_SIZE;
 
@@ -257,6 +243,17 @@ function stubXmlHttpRequest(scenarios: UploadScenario[]) {
   globalWithXhr.XMLHttpRequest = MockXMLHttpRequest as unknown as typeof XMLHttpRequest;
 }
 
+describe('resolveThroughputDurationMs', () => {
+  it('исключает TTFB из длительности передачи', () => {
+    const requestStart = 0;
+    const firstChunk = 50;
+    const lastChunk = 250;
+
+    expect(resolveThroughputDurationMs(requestStart, firstChunk, lastChunk)).toBe(200);
+    expect(resolveThroughputDurationMs(requestStart, null, lastChunk)).toBe(250);
+  });
+});
+
 describe('bytesToMbps', () => {
   it('конвертирует байты и секунды в Мбит/с', () => {
     const oneMbInBytes = 1 * 1024 * 1024;
@@ -395,7 +392,6 @@ describe('testDownloadSpeed', () => {
 
     const result = await testDownloadSpeed();
 
-    // Проверяем, что результат близок к ожидаемому (с учетом погрешности округления)
     expect(result).toBeGreaterThan(0);
     expect(fetchMock).toHaveBeenCalledTimes(MEASUREMENT_COUNT);
   });
@@ -560,7 +556,7 @@ describe('testPing', () => {
 });
 
 describe('testAllSpeeds', () => {
-  it('должен выполнить все три теста параллельно и вернуть результаты', async () => {
+  it('выполняет ping, затем download и upload последовательно', async () => {
     // Мокаем fetch для download и ping
     const downloadBytes = FILE_SIZES_MB.reduce((acc, size) => acc + size * 1024 * 1024, 0);
     const downloadChunks = Math.ceil(downloadBytes / DOWNLOAD_CHUNK_BYTES);

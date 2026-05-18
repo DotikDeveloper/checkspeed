@@ -34,6 +34,20 @@ export const bytesToMbps = (bytesTransferred: number, durationSeconds: number): 
   return megabits / durationSeconds;
 };
 
+/** Время передачи полезной нагрузки без фазы установки соединения (TTFB). */
+export const resolveThroughputDurationMs = (
+  requestStartMs: number,
+  firstChunkTimeMs: number | null,
+  lastChunkTimeMs: number,
+): number => {
+  const totalDurationMs = lastChunkTimeMs - requestStartMs;
+  const transferDurationMs = firstChunkTimeMs !== null
+    ? lastChunkTimeMs - firstChunkTimeMs
+    : totalDurationMs;
+
+  return transferDurationMs > 0 ? transferDurationMs : totalDurationMs;
+};
+
 const buildDownloadUrl = (sizeMb: number) => `${DOWNLOAD_ENDPOINT}?size=${sizeMb}`;
 
 const megabytesToBytes = (sizeMb: number) => Math.round(sizeMb * 1024 * 1024);
@@ -122,14 +136,15 @@ const measureDownloadOnce = async (sizeMb: number): Promise<number> => {
 
   const totalDuration = lastChunkTime - requestStart;
   const transferDuration = firstChunkTime ? lastChunkTime - firstChunkTime : totalDuration;
+  const throughputDurationMs = resolveThroughputDurationMs(requestStart, firstChunkTime, lastChunkTime);
 
-  if (totalDuration <= 0 || bytesTransferred === 0) {
-    logger.warn('download', `Некорректные данные: duration=${totalDuration}ms, bytes=${bytesTransferred}`);
+  if (throughputDurationMs <= 0 || bytesTransferred === 0) {
+    logger.warn('download', `Некорректные данные: duration=${throughputDurationMs}ms, bytes=${bytesTransferred}`);
     return 0;
   }
 
-  // Используем общее время от начала запроса до конца передачи
-  const durationSeconds = totalDuration / 1000;
+  // Скорость считаем только по времени передачи полезной нагрузки (без TTFB/установки соединения).
+  const durationSeconds = throughputDurationMs / 1000;
   const speed = bytesToMbps(bytesTransferred, durationSeconds);
 
   logger.info('download', `Измерение завершено`, {
@@ -150,9 +165,7 @@ const measureDownloadOnce = async (sizeMb: number): Promise<number> => {
   return speed;
 };
 
-/**
- * Выполняет измерения для одного размера файла параллельно
- */
+/** Выполняет несколько последовательных измерений для одного размера файла. */
 const measureDownloadForSize = async (sizeMb: number): Promise<number> => {
   logger.debug('download', `Тестирование размера ${sizeMb} МБ`);
   const measurements: number[] = [];
@@ -195,12 +208,13 @@ const measureDownloadForSize = async (sizeMb: number): Promise<number> => {
 export const testDownloadSpeed = async (): Promise<number> => {
   logger.info('download', 'Начало тестирования download скорости');
 
-  // Запускаем измерения для всех размеров файлов параллельно
-  const sizePromises = FILE_SIZES_MB.map(async (sizeMb) => ({
-    sizeMb,
-    speed: await measureDownloadForSize(sizeMb)
-  }));
-  const aggregatedSpeeds = (await Promise.all(sizePromises)).filter((sample) => sample.speed > 0);
+  const aggregatedSpeeds: SpeedSample[] = [];
+  for (const sizeMb of FILE_SIZES_MB) {
+    const speed = await measureDownloadForSize(sizeMb);
+    if (speed > 0) {
+      aggregatedSpeeds.push({ sizeMb, speed });
+    }
+  }
 
   if (aggregatedSpeeds.length === 0) {
     logger.error('download', 'Нет успешных измерений download скорости');
@@ -336,8 +350,7 @@ const measureUploadOnce = (sizeMb: number): Promise<number> =>
 
     xhr.open('POST', UPLOAD_ENDPOINT);
     xhr.responseType = 'json';
-    // Уменьшаем таймаут до 30 секунд для serverless функций (Vercel имеет лимиты)
-    // Для файлов до 3 МБ это должно быть достаточно
+    // 30 с — лимит для serverless (Vercel); достаточно для payload до 5 МБ
     xhr.timeout = 30000; // 30 секунд таймаут
 
     xhr.upload.addEventListener('loadstart', handleLoadStart);
@@ -353,9 +366,7 @@ const measureUploadOnce = (sizeMb: number): Promise<number> =>
     xhr.send(bodyView.buffer);
   });
 
-/**
- * Выполняет измерения для одного размера файла параллельно
- */
+/** Выполняет несколько последовательных измерений для одного размера файла. */
 const measureUploadForSize = async (sizeMb: number): Promise<number> => {
   logger.debug('upload', `Тестирование размера ${sizeMb} МБ`);
   const measurements: number[] = [];
@@ -398,12 +409,13 @@ const measureUploadForSize = async (sizeMb: number): Promise<number> => {
 export const testUploadSpeed = async (): Promise<number> => {
   logger.info('upload', 'Начало тестирования upload скорости');
 
-  // Запускаем измерения для всех размеров файлов параллельно
-  const sizePromises = FILE_SIZES_MB.map(async (sizeMb) => ({
-    sizeMb,
-    speed: await measureUploadForSize(sizeMb)
-  }));
-  const aggregatedSpeeds = (await Promise.all(sizePromises)).filter((sample) => sample.speed > 0);
+  const aggregatedSpeeds: SpeedSample[] = [];
+  for (const sizeMb of FILE_SIZES_MB) {
+    const speed = await measureUploadForSize(sizeMb);
+    if (speed > 0) {
+      aggregatedSpeeds.push({ sizeMb, speed });
+    }
+  }
 
   if (aggregatedSpeeds.length === 0) {
     logger.error('upload', 'Нет успешных измерений upload скорости');
@@ -454,8 +466,12 @@ export async function testPing(): Promise<number> {
   for (let attempt = 0; attempt < PING_ATTEMPTS; attempt += 1) {
     try {
       const latency = await measurePingOnce();
-      rawMeasurements.push(latency);
-      logger.debug('ping', `Попытка ${attempt + 1}/${PING_ATTEMPTS}: ${latency.toFixed(2)} мс`);
+      if (latency > 0) {
+        rawMeasurements.push(latency);
+        logger.debug('ping', `Попытка ${attempt + 1}/${PING_ATTEMPTS}: ${latency.toFixed(2)} мс`);
+      } else {
+        logger.debug('ping', `Попытка ${attempt + 1}/${PING_ATTEMPTS}: пропущена (rate limit или нулевая задержка)`);
+      }
     } catch (error) {
       logger.warn('ping', `Попытка ${attempt + 1}/${PING_ATTEMPTS} завершилась ошибкой: ${error instanceof Error ? error.message : String(error)}`);
       // Пропускаем неудачные попытки, но продолжаем измерения
@@ -507,18 +523,16 @@ export interface SpeedTestResults {
 }
 
 /**
- * Выполняет все измерения скорости параллельно
- * Download, Upload и Ping выполняются одновременно для сокращения общего времени измерения
- * 
- * @returns Promise с результатами всех измерений
+ * Выполняет полный цикл измерений: ping → download → upload (последовательно).
+ * Направления не конкурируют за полосу пропускания, как в классических speedtest.
  */
 export async function testAllSpeeds(): Promise<SpeedTestResults> {
-  logger.info('speedtest', 'Начало параллельного тестирования всех параметров скорости');
+  logger.info('speedtest', 'Начало тестирования всех параметров скорости');
   const startTime = performance.now();
 
-  // Измеряем ping отдельно, чтобы throughput-тесты не искажали latency.
   const ping = await testPing();
-  const [download, upload] = await Promise.all([testDownloadSpeed(), testUploadSpeed()]);
+  const download = await testDownloadSpeed();
+  const upload = await testUploadSpeed();
 
   const totalTime = performance.now() - startTime;
   logger.info('speedtest', `Все измерения завершены за ${(totalTime / 1000).toFixed(2)} секунд`, {

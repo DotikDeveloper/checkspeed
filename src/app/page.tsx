@@ -267,15 +267,11 @@ export default function Home() {
         logger.warn('speedtest', `Ошибка при измерении ping: ${error instanceof Error ? error.message : String(error)}`);
       }
 
-      // Выполняем серию измерений download и upload
-      // Download и upload выполняются параллельно для каждого измерения
+      // Серия измерений: сначала download, затем upload (без конкуренции за канал).
       for (let i = 0; i < SAMPLE_COUNT; i += 1) {
         try {
-          // Запускаем download и upload параллельно (без ping, так как он уже измерен)
-          const [download, upload] = await Promise.all([
-            testDownloadSpeed(),
-            testUploadSpeed()
-          ]);
+          const download = await testDownloadSpeed();
+          const upload = await testUploadSpeed();
           
           // Добавляем только валидные (не нулевые) значения в соответствующие серии
           // Это предотвращает занижение средних значений из-за rate limiting
@@ -436,7 +432,7 @@ export default function Home() {
             {buttonLabel}
           </button>
           <p className="text-sm text-gray-400 text-center">
-            Каждое измерение выполняется {SAMPLE_COUNT} раз. Средняя скорость вычисляется по результатам серии тестов.
+            Каждое направление измеряется {SAMPLE_COUNT} раз (сначала получение, затем отдача). Средняя скорость — по серии тестов.
             {downloadSamples.length < SAMPLE_COUNT && downloadSamples.length > 0 && (
               <span className="block mt-1 text-yellow-400">
                 Выполнено {downloadSamples.length} из {SAMPLE_COUNT} измерений
